@@ -6,8 +6,8 @@
 //! and matrix ([`vui`]) where heic-rs assumes BT.709 limited range, and upsamples chroma like
 //! libheif. Single pictures and grid-tiled photos, 8- to 16-bit, monochrome, alpha auxiliary
 //! images, ICC, EXIF and XMP. The API is plain data ([`Info`], [`Decoded`], [`Error`]) so the
-//! crate knows nothing about the rest of LightCraft; `lightcraft-codecs` adapts it behind its
-//! `heif` feature. Shares heic-rs and its regression fixtures with PhotoCraft's `photocraft-heif`.
+//! crate knows nothing about the rest of MIXEL Light; `lightcraft-codecs` adapts it behind its
+//! `heif` feature. Shares heic-rs and its regression fixtures with MIXEL Photo's `photocraft-heif`.
 //!
 //! HEIF records orientation in the container (`irot`/`imir`, plus a `clap` crop), not in EXIF.
 //! [`Options::apply_transforms`] applies them; with it off, the pixels come back as coded.
@@ -363,7 +363,7 @@ mod tests_synthetic;
 mod tests {
     use super::*;
 
-    /// Found by PhotoCraft's `decode_heif` fuzz target: a malformed box makes heic-rs 0.1.1 slice
+    /// Found by MIXEL Photo's `decode_heif` fuzz target: a malformed box makes heic-rs 0.1.1 slice
     /// out of range (`boxes.rs:130`). It must be an error, not a crash.
     const HEIC_RS_BOX_PANIC: [u8; 72] = [
         0x00, 0x00, 0x00, 0x24, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0x00, 0x00, 0x00, 0x00, 0x6d, 0x69, 0x66, 0x31, 0x4d, 0x69, 0x50,

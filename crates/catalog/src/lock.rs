@@ -34,7 +34,7 @@ pub struct LockOwner {
     pub pid: u32,
     /// Computer name, if known.
     pub host: String,
-    /// The program (`LightCraft`, `lightcraft-cli`…) and its version.
+    /// The program (`MIXEL Light`, `lightcraft-cli`…) and its version.
     pub program: String,
     pub version: String,
     /// When it opened the library (seconds since 1970).
@@ -53,9 +53,9 @@ impl LockOwner {
         }
     }
 
-    /// "LightCraft 0.3.0 (process 123 on studio-mac)".
+    /// "MIXEL Light 0.3.0 (process 123 on studio-mac)".
     pub fn describe(&self) -> String {
-        let program = if self.program.is_empty() { "another LightCraft" } else { self.program.as_str() };
+        let program = if self.program.is_empty() { "another MIXEL Light" } else { self.program.as_str() };
         let version = if self.version.is_empty() { String::new() } else { format!(" {}", self.version) };
         let host = if self.host.is_empty() {
             String::new()
@@ -77,7 +77,7 @@ fn host_name() -> String {
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
     /// Another process has the library open.
-    #[error("This library is already open in {}. Close it there first.", .0.as_ref().map(LockOwner::describe).unwrap_or_else(|| "another LightCraft program".into()))]
+    #[error("This library is already open in {}. Close it there first.", .0.as_ref().map(LockOwner::describe).unwrap_or_else(|| "another MIXEL Light program".into()))]
     InUse(Option<LockOwner>),
 }
 

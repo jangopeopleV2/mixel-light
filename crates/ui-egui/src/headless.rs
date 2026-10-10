@@ -912,7 +912,7 @@ mod tests {
     }
 
     /// Adding a face model: the dialog shows the file's terms, the model is installed only once they are
-    /// accepted, and a file LightCraft cannot use only says why.
+    /// accepted, and a file MIXEL Light cannot use only says why.
     #[test]
     fn adding_a_face_model_shows_its_terms_and_installs_only_once_accepted() {
         use crate::state::Dialog;
@@ -2279,7 +2279,7 @@ mod tests {
         assert_eq!(h.app.ui.right, crate::state::RightPanel::Edit, "no-op outside tools");
     }
 
-    /// ⌘Q (File → Quit LightCraft) closes the window.
+    /// ⌘Q (File → Quit MIXEL Light) closes the window.
     #[test]
     fn cmd_q_quits() {
         let mut h = demo([900.0, 600.0]);

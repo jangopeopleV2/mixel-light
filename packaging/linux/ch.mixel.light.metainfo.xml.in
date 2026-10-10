@@ -2,21 +2,21 @@
 <!-- AppStream metadata (software centres, Flathub). Template: package.sh and the Flatpak
      manifest substitute @VERSION@ and @DATE@ from Cargo.toml and the build date. -->
 <component type="desktop-application">
-  <id>ai.storyteller.lightcraft</id>
+  <id>ch.mixel.light</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
-  <name>LightCraft</name>
+  <name>MIXEL Light</name>
   <summary>Organise photos and develop raw files, non-destructively</summary>
   <developer id="ai.storyteller">
-    <name>Learning Machines LLC</name>
+    <name>MIXEL</name>
   </developer>
   <description>
     <p>
-      LightCraft is a photo library and raw developer. Organise photos and develop raw files, non-destructively
+      MIXEL Light is a photo library and raw developer. Organise photos and develop raw files, non-destructively
     </p>
   </description>
-  <launchable type="desktop-id">ai.storyteller.lightcraft.desktop</launchable>
-  <icon type="stock">ai.storyteller.lightcraft</icon>
+  <launchable type="desktop-id">ch.mixel.light.desktop</launchable>
+  <icon type="stock">ch.mixel.light</icon>
   <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates): no vcs-browser. -->
   <url type="homepage">https://getartcraft.com/apps/lightcraft</url>
   <url type="bugtracker">https://github.com/storytold/lightcraft/issues</url>

@@ -1,7 +1,7 @@
-//! LightCraft's MCP server.
+//! MIXEL Light's MCP server.
 //!
 //! [Model Context Protocol](https://modelcontextprotocol.io) over stdio: newline-delimited
-//! JSON-RPC 2.0, hand-written (no async runtime). The server exposes LightCraft as MCP tools and
+//! JSON-RPC 2.0, hand-written (no async runtime). The server exposes MIXEL Light as MCP tools and
 //! resources and forwards everything to a [`Backend`]:
 //!
 //! - [`Remote`] talks to a running desktop app through its loopback JSON-lines control channel

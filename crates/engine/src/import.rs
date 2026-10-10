@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::Session;
 use crate::media::ProbeInfo;
 
-/// File extensions LightCraft imports (lower case).
+/// File extensions MIXEL Light imports (lower case).
 pub const EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "srw", "psd",
     "jxl", "gif", "bmp",
@@ -238,7 +238,7 @@ pub fn has_import_look(p: &Photo) -> bool {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ImportDefaults {
-    /// Preset applied to raw files (`None` = the LightCraft default).
+    /// Preset applied to raw files (`None` = the MIXEL Light default).
     pub raw_preset: Option<String>,
     /// Use a camera's own default (below) when the photo's camera has one.
     pub per_camera: bool,
@@ -266,7 +266,7 @@ pub struct ImportDefaults {
 pub struct CameraDefault {
     /// Make + model (`Meta::camera`).
     pub camera: String,
-    /// Preset id; `None` = the LightCraft default for this camera.
+    /// Preset id; `None` = the MIXEL Light default for this camera.
     pub preset: Option<String>,
 }
 

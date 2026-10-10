@@ -1,4 +1,4 @@
-//! Where LightCraft keeps per-user data on this machine: the config folder (app settings, camera
+//! Where MIXEL Light keeps per-user data on this machine: the config folder (app settings, camera
 //! profiles, face and denoise models).
 //!
 //! Hosts that have a file system (the desktop app, the CLI, the MCP server) share these defaults so a model
@@ -10,12 +10,12 @@ use std::path::PathBuf;
 
 use crate::Session;
 
-/// LightCraft's per-user config folder (`…/LightCraft`), if the platform tells us where.
+/// MIXEL Light's per-user config folder (`…/MIXEL Light`), if the platform tells us where.
 pub fn config_dir() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/LightCraft"))
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/MIXEL Light"))
     } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("LightCraft"))
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("MIXEL Light"))
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)

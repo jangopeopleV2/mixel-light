@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and package LightCraft for Linux (<arch> is x86_64 or aarch64):
+# Build and package MIXEL Light for Linux (<arch> is x86_64 or aarch64):
 #
 #   $DIST/lightcraft-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
 #   $DIST/lightcraft-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
@@ -17,7 +17,7 @@ set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
-APP_ID=ai.storyteller.lightcraft
+APP_ID=ch.mixel.light
 
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar"
@@ -36,10 +36,10 @@ case "$ARCH" in
   aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
-export LIGHTCRAFT_MAINTAINER="${LIGHTCRAFT_MAINTAINER:-LightCraft maintainers <lightcraft@storyteller.ai>}"
+export LIGHTCRAFT_MAINTAINER="${LIGHTCRAFT_MAINTAINER:-MIXEL Light maintainers <lightcraft@storyteller.ai>}"
 BASENAME="lightcraft-$VERSION-linux-$ARCH"
 
-echo "==> LightCraft $VERSION for Linux $ARCH ($FORMATS)"
+echo "==> MIXEL Light $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
   (cd "$ROOT" && cargo build --release --locked -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif)
@@ -94,7 +94,7 @@ fi
 
 # ---- AppImage -----------------------------------------------------------------------------------
 if has appimage; then
-  APPDIR="$WORK/LightCraft.AppDir"
+  APPDIR="$WORK/MIXEL Light.AppDir"
   cp -R "$STAGE" "$APPDIR"
   mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
   ln -s usr/bin/lightcraft "$APPDIR/AppRun"

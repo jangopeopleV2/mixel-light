@@ -3,7 +3,7 @@
 //! Decoding lives in the optional `lightcraft-heif` crate (heic-rs, a pure-Rust HEVC
 //! still-picture decoder, plus a libheif-matching colour conversion), enabled by this crate's
 //! `heif` feature — off by default because HEVC is patent-encumbered and whether a build carries
-//! an HEVC decoder is the distributor's call (the same policy as the sibling PhotoCraft). Without
+//! an HEVC decoder is the distributor's call (the same policy as the sibling MIXEL Photo). Without
 //! the feature, HEIF files are still detected and opening one is an [`Error::Unsupported`] error
 //! saying so, never a panic.
 //!
@@ -22,7 +22,7 @@ const F: Format = Format::Heif;
 
 /// The reason given when this build has no HEIF decoder.
 #[cfg(not(feature = "heif"))]
-pub(crate) const NOT_IN_BUILD: &str = "HEIC/HEIF support isn't included in this build of LightCraft";
+pub(crate) const NOT_IN_BUILD: &str = "HEIC/HEIF support isn't included in this build of MIXEL Light";
 
 #[cfg(not(feature = "heif"))]
 pub(crate) fn decode(_bytes: &[u8], _opts: &DecodeOptions) -> Result<Decoded> {
@@ -123,7 +123,7 @@ mod tests {
         assert!(matches!(&h, Err(crate::Error::Unsupported(Format::Heif, why)) if why.contains("isn't included in this build")), "{h:?}");
     }
 
-    /// Found by PhotoCraft's `decode_heif` fuzz target: a malformed box makes heic-rs 0.1.1 slice
+    /// Found by MIXEL Photo's `decode_heif` fuzz target: a malformed box makes heic-rs 0.1.1 slice
     /// out of range (`boxes.rs:130`). It must be an error, not a crash.
     #[cfg(feature = "heif")]
     const HEIC_RS_BOX_PANIC: [u8; 72] = [

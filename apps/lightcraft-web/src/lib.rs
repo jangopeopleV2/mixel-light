@@ -1,4 +1,4 @@
-//! LightCraft in the browser: the same egui UI as the desktop app, compiled to WASM.
+//! MIXEL Light in the browser: the same egui UI as the desktop app, compiled to WASM.
 //!
 //! Build with `cargo xtask web` (→ `target/web/`), then serve that folder over HTTP (see
 //! `docs/web.md`). Differences from the desktop host:

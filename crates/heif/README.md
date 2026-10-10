@@ -1,6 +1,6 @@
 # lightcraft-heif
 
-The optional HEIF / HEIC decoder of LightCraft: iPhone and Mac photos. [`heic-rs`](https://github.com/tbraun96/heic-rs)
+The optional HEIF / HEIC decoder of MIXEL Light: iPhone and Mac photos. [`heic-rs`](https://github.com/tbraun96/heic-rs)
 (pure Rust, no `unsafe`, MIT OR Apache-2.0, written from the H.265 / HEIF specifications) reads the
 container and reconstructs the HEVC pictures; this crate turns them into 16-bit RGB itself so the
 result matches libheif to within one code value:
@@ -27,7 +27,7 @@ let thumb = lightcraft_heif::decode_thumbnail(&bytes, 256, &Default::default())?
 
 Errors are `Error::Unsupported` (image sequences, overlays, 4:2:2/4:4:4, …), `Error::Limit` or
 `Error::Malformed`. It never panics: every call into heic-rs runs under `catch_unwind`, and a panic
-inside it (PhotoCraft's fuzzing found two in 0.1.1) becomes `Error::Malformed`.
+inside it (MIXEL Photo's fuzzing found two in 0.1.1) becomes `Error::Malformed`.
 
 Feature `testdata` exposes `lightcraft_heif::testdata`: lossless synthetic HEIF files (PCM-coded
 32 × 32 HEVC pictures, grids, every property above) for the tests of the crates above.
@@ -42,6 +42,6 @@ Feature `testdata` exposes `lightcraft_heif::testdata`: lossless synthetic HEIF 
 - **HEVC patents are a distributor's call.** `lightcraft-codecs` uses this crate only behind its
   non-default `heif` feature; the apps forward it and the release packages enable it. Without it,
   HEIC files are still recognised and opening one is a clear "HEIC/HEIF support isn't included in
-  this build" error — the same policy as PhotoCraft.
+  this build" error — the same policy as MIXEL Photo.
 
-The crate depends on no other LightCraft crate; `codecs` → `heif` is the only edge between them.
+The crate depends on no other MIXEL Light crate; `codecs` → `heif` is the only edge between them.

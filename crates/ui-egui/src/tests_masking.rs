@@ -875,13 +875,13 @@ fn edit_in_external_editor_opens_the_copy() {
     };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    h.app.ui.settings.external_editor = "PhotoCraft".into();
+    h.app.ui.settings.external_editor = "MIXEL Photo".into();
     let r = h.request("engine.execute", json!({"command": "photo.editInExternal", "params": {"dir": dir.to_string_lossy()}}), T);
     assert_eq!(r["ok"], true, "{r}");
     let calls = opened.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
     assert!(calls[0].0.ends_with("-Edit.tif") && std::path::Path::new(&calls[0].0).exists(), "{calls:?}");
-    assert_eq!(calls[0].1, "PhotoCraft");
+    assert_eq!(calls[0].1, "MIXEL Photo");
     let _ = std::fs::remove_dir_all(&dir);
     h.settle(SETTLE);
 }

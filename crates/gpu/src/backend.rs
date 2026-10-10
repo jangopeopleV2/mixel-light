@@ -1,4 +1,4 @@
-//! Which wgpu backends LightCraft lets wgpu use — for its compute device and for the desktop
+//! Which wgpu backends MIXEL Light lets wgpu use — for its compute device and for the desktop
 //! window (eframe) — and the crash sentinel around device creation (issue #136).
 //!
 //! wgpu loads the system driver of *every* backend in the instance's set while it enumerates
@@ -125,10 +125,10 @@ pub fn window_backends() -> Backends {
 /// `WGPU_DX12_COMPILER` (`wgpu`, wgpu's own variable: `fxc`, `dxc`, `auto`…) names another.
 ///
 /// Issue #471: wgpu's default (`Auto`) loads whichever `dxcompiler.dll` the DLL search path finds
-/// first — LightCraft ships none, so it is some other program's (an SDK's, a folder on `PATH`). A
+/// first — MIXEL Light ships none, so it is some other program's (an SDK's, a folder on `PATH`). A
 /// copy without its `dxil.dll` beside it warns that the DXIL is unsigned; wgpu takes the warning for
 /// a compile error, its own validation pipelines fail, the device is lost and the window never
-/// opens. FXC is always there and compiles everything LightCraft's shaders need.
+/// opens. FXC is always there and compiles everything MIXEL Light's shaders need.
 pub fn dx12_compiler(env: Option<&str>) -> wgpu::Dx12Compiler {
     let Some(v) = env else { return wgpu::Dx12Compiler::Fxc };
     v.parse().unwrap_or_else(|e| {
@@ -137,7 +137,7 @@ pub fn dx12_compiler(env: Option<&str>) -> wgpu::Dx12Compiler {
     })
 }
 
-/// wgpu's backend options for every instance LightCraft creates — the window's and the compute
+/// wgpu's backend options for every instance MIXEL Light creates — the window's and the compute
 /// devices': wgpu's environment variables, with the DX12 compiler from [`dx12_compiler`].
 pub fn backend_options() -> wgpu::BackendOptions {
     let mut o = wgpu::BackendOptions::from_env_or_default();
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!(choose(None, Some("dx12")), BackendChoice::Use(Backends::DX12));
         assert_eq!(choose(Some("vulkan"), Some("dx12")), BackendChoice::Use(Backends::VULKAN));
         assert_eq!(choose(Some("off"), Some("dx12")), BackendChoice::Off);
-        // unknown LightCraft value: WGPU_BACKEND still applies
+        // unknown MIXEL Light value: WGPU_BACKEND still applies
         assert_eq!(choose(Some("bogus"), Some("gl")), BackendChoice::Use(Backends::GL));
         // WGPU_BACKEND never turns the GPU off
         assert_eq!(choose(None, Some("off")), BackendChoice::Auto);

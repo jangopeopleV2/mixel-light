@@ -3,7 +3,7 @@ name = "lightcraft-ui-egui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft egui frontend (Lightroom-style UI); swappable — nothing below depends on it (L5)"
+description = "MIXEL Light egui frontend (Lightroom-style UI); swappable — nothing below depends on it (L5)"
 
 [lints]
 workspace = true
