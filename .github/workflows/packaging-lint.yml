@@ -1,13 +1,10 @@
-# Quick static checks for the release pipeline (seconds, no Rust build): workflow syntax,
-# packaging shell/PowerShell scripts, and the Linux desktop/AppStream/Flatpak metadata.
+# Quick checks for the release pipeline (no Rust build): workflow syntax, packaging
+# shell/PowerShell scripts, and the Linux desktop/AppStream/Flatpak metadata (seconds), plus a
+# Windows job that builds and installs throwaway per-user MSI probes for the install-folder
+# searches (a few minutes).
 name: Packaging lint
 
 on:
-  push:
-    branches: [main, release]
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
-  pull_request:
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
   workflow_dispatch:
 
 permissions:
@@ -53,21 +50,35 @@ jobs:
           fi
           # The interactive installer asks where to install and ends on a completion page (issues #18, #399).
           for want in '<UIRef Id="LightcraftUI" />' 'Value="InstallDirDlg"' '<Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />' \
-              'Key="Software\LightCraft" Name="InstallFolder"' 'Value="LaunchLightcraft"'; do
+              'Key="Software\MIXEL Light" Name="InstallFolder"' 'Value="LaunchLightcraft"'; do
             grep -qF "$want" packaging/windows/lightcraft.wxs || { echo "::error::lightcraft.wxs lost: $want"; exit 1; }
           done
-          desktop-file-validate packaging/linux/ai.storyteller.lightcraft.desktop
-          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ai.storyteller.lightcraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.lightcraft.metainfo.xml"
-          appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.lightcraft.metainfo.xml"
+          desktop-file-validate packaging/linux/ch.mixel.light.desktop
+          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ch.mixel.light.metainfo.xml.in >"$RUNNER_TEMP/ch.mixel.light.metainfo.xml"
+          appstreamcli validate --no-net --explain "$RUNNER_TEMP/ch.mixel.light.metainfo.xml"
           python3 - <<'EOF'
           import yaml
-          src = yaml.safe_load(open("packaging/linux/flatpak/ai.storyteller.lightcraft.yml"))
-          bundle = yaml.safe_load(open("packaging/linux/flatpak/ai.storyteller.lightcraft.bundle.yml"))
+          src = yaml.safe_load(open("packaging/linux/flatpak/ch.mixel.light.yml"))
+          bundle = yaml.safe_load(open("packaging/linux/flatpak/ch.mixel.light.bundle.yml"))
           for m in (src, bundle):
-              assert m["id"] == "ai.storyteller.lightcraft" and m["command"] == "lightcraft", m["id"]
+              assert m["id"] == "ch.mixel.light" and m["command"] == "lightcraft", m["id"]
           for key in ("runtime", "runtime-version", "sdk", "finish-args"):
               assert src[key] == bundle[key], f"Flatpak manifests disagree on {key}: {src[key]} vs {bundle[key]}"
           print("Flatpak manifests ok")
           EOF
       - name: FreeBSD tarball layout (stub binaries)
         run: bash packaging/freebsd/package.sh --dry-run
+
+  windows-install-folder:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: Install-folder fallback and precedence (real MSI AppSearch)
+        shell: pwsh
+        run: |
+          ./packaging/windows/test-install-folder.ps1 -Arch x64
+          ./packaging/windows/test-install-folder.ps1 -Arch x86

@@ -1,5 +1,5 @@
-//! Optional build input: with `CRAFT_FONTS_DIR=<storytold/craft-fonts checkout>`, embed every font
-//! in its `fonts/manifest.txt` as `CRAFT_FONTS` (see src/fonts.rs). Unset, `CRAFT_FONTS` is empty.
+//! With `CRAFT_FONTS_DIR=<storytold/craft-fonts checkout>`, embed its manifest as `CRAFT_FONTS`.
+//! Unset, use MIXEL's pinned, unmodified two-face UI subset in `mixel/vendor/craft-fonts`.
 //! Recipe from craft-fonts' docs/integration.md; craft-fonts is never a Cargo dependency, and this
 //! script only reads a local directory (no network).
 //!
@@ -9,26 +9,27 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
-    let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
+    let external = std::env::var_os("CRAFT_FONTS_DIR");
+    let required = external.is_none() || std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
+    let dir = external.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("mixel/vendor/craft-fonts"));
     let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
     let mut embedded = 0;
-    if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from).map(resolve) {
-        match craft_fonts(&dir, required) {
-            Ok(entries) => {
-                embedded = entries.lines().count();
-                src.push_str(&entries);
-            }
-            Err(e) if required => {
-                println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display());
-            }
-            Err(e) => println!("cargo::warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {e}", dir.display()),
+    let dir = resolve(dir);
+    match craft_fonts(&dir, required) {
+        Ok(entries) => {
+            embedded = entries.lines().count();
+            src.push_str(&entries);
         }
-    } else if required {
-        println!("cargo::error=CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is missing");
+        Err(e) if required => {
+            println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display());
+        }
+        Err(e) => println!("cargo::warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {e}", dir.display()),
     }
     src.push_str("];\n");
     // Without them the app still runs and every language still selectable, so Chinese and Japanese
@@ -81,6 +82,16 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
         println!("cargo::rerun-if-changed={}", path.display());
+        if let Some(expected) = f.get(6) {
+            let bytes = std::fs::read(&path).map_err(|e| format!("{file}: {e}"))?;
+            let mut actual = String::new();
+            for byte in Sha256::digest(&bytes) {
+                let _ = write!(actual, "{byte:02x}");
+            }
+            if actual != *expected {
+                return Err(format!("{file}: SHA-256 differs from the pinned font manifest"));
+            }
+        }
         let scripts: Vec<String> = scripts.split(',').map(|s| format!("{:?}", s.trim())).collect();
         let _ = writeln!(
             out,

@@ -3,14 +3,6 @@
 name: FreeBSD
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - "**/Cargo.toml"
-      - .github/workflows/freebsd.yml
   workflow_dispatch:
 
 concurrency:

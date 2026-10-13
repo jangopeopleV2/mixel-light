@@ -1,0 +1,4 @@
+# MIXEL Light default UI subset of craft-fonts@8dcdacd5153e64560d109541a47d806f26f048c0.
+# family | style | file | scripts | licence | licence file | sha256 | source
+BIZ UDPGothic | Regular | fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf | Jpan,Latn | OFL-1.1 | fonts/biz-ud-pgothic/OFL.txt | 258d7156c165f2ff774b6efee637c22c3b950de0d8a10e501137061bc8085d01 | https://github.com/googlefonts/morisawa-biz-ud-gothic/tree/18934af56b9c003ca58c54bffbf226848cb11032
+Noto Sans CJK SC | Regular | fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf | Hans,Latn | OFL-1.1 | fonts/noto-sans-cjk-sc/OFL.txt | 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b | https://github.com/notofonts/noto-cjk/tree/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese

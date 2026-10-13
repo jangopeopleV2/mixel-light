@@ -44,8 +44,7 @@ warn() {
   if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::$*"; else echo "warning: $*" >&2; fi
 }
 
-# Copy licence and readme files that exist into a package directory (plus the craft-fonts licences
-# when building with CRAFT_FONTS_DIR).
+# Copy licence and readme files, including the selected CJK font licences.
 copy_docs() {
   local dest="$1" f
   for f in README.md LICENSE LICENSE-MIT LICENSE-APACHE COPYRIGHT NOTICE; do
@@ -54,12 +53,11 @@ copy_docs() {
   copy_font_licences "$dest"
 }
 
-# Builds made with CRAFT_FONTS_DIR (storytold/craft-fonts, an optional build input) embed its fonts;
-# their OFL licences go with the package as OFL-<family-dir>.txt. Nothing to do without it.
+# External CRAFT_FONTS_DIR overrides the pinned default UI subset. Both choices
+# ship their complete OFL licences beside the binaries as OFL-<family-dir>.txt.
 copy_font_licences() {
-  local dest="$1" lic family
-  [ -n "${CRAFT_FONTS_DIR:-}" ] || return 0
-  for lic in "$CRAFT_FONTS_DIR"/fonts/*/OFL.txt; do
+  local dest="$1" lic family fonts_dir="${CRAFT_FONTS_DIR:-$ROOT/mixel/vendor/craft-fonts}"
+  for lic in "$fonts_dir"/fonts/*/OFL.txt; do
     [ -f "$lic" ] || continue
     family="$(basename "$(dirname "$lic")")"
     cp "$lic" "$dest/OFL-$family.txt"

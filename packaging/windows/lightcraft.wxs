@@ -16,7 +16,7 @@
       Name="MIXEL Light"
       Manufacturer="MIXEL"
       Version="$(var.Version)"
-      UpgradeCode="229BB552-5EFD-479A-BA86-8CB6D926390C"
+      UpgradeCode="7D285E14-BF9C-51B2-B869-EF7730FDBC48"
       Scope="perMachine"
       Compressed="yes"
       Language="1033">
@@ -29,8 +29,8 @@
 
     <Icon Id="LightcraftIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="LightcraftIcon.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://getartcraft.com/apps/lightcraft" />
-    <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/lightcraft" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/jangopeopleV2/mixel-light" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/jangopeopleV2/mixel-light" />
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
@@ -44,6 +44,26 @@
     </Property>
     <SetProperty Id="INSTALLFOLDER" Value="[PREVIOUSINSTALLFOLDER]" After="AppSearch" Sequence="both"
         Condition="PREVIOUSINSTALLFOLDER AND NOT INSTALLFOLDER" />
+    <!-- Older MSIs (including 0.5.0) only recorded the executable in App Paths. Type="file"
+         without a FileSearch returns its containing directory. Keep the searches separate so
+         the newer InstallFolder value and an explicit INSTALLFOLDER always take precedence. -->
+    <Property Id="LEGACYINSTALLFOLDER">
+      <RegistrySearch Id="LegacyInstallFolder" Root="HKLM"
+          Key="Software\Microsoft\Windows\CurrentVersion\App Paths\lightcraft.exe" Type="file" />
+    </Property>
+    <!-- That directory search doesn't check the executable exists, and when its unquoted path is
+         gone it falls back to the text before the first space: a deleted
+         "C:\Program Files\MIXEL Light\lightcraft.exe" yields "C:\". Only use the folder when this
+         search, which does require lightcraft.exe, finds it too. -->
+    <Property Id="LEGACYINSTALLEXE">
+      <RegistrySearch Id="LegacyInstallExe" Root="HKLM"
+          Key="Software\Microsoft\Windows\CurrentVersion\App Paths\lightcraft.exe" Type="file">
+        <FileSearch Id="LegacyInstallExeFile" Name="lightcraft.exe" />
+      </RegistrySearch>
+    </Property>
+    <SetProperty Id="INSTALLFOLDER" Action="SetInstallFolderFromAppPaths" Value="[LEGACYINSTALLFOLDER]"
+        After="SetINSTALLFOLDER" Sequence="both"
+        Condition="LEGACYINSTALLFOLDER AND LEGACYINSTALLEXE AND NOT PREVIOUSINSTALLFOLDER AND NOT INSTALLFOLDER" />
     <StandardDirectory Id="ProgramMenuFolder" />
 
     <Feature Id="Main" Title="MIXEL Light" Level="1">
@@ -178,6 +198,9 @@
 
       <Component Id="LightcraftCli">
         <File Id="LightcraftCliExe" Source="$(var.BinDir)\lightcraft-cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="LightcraftFontNotices">
+        <File Id="LightcraftFontOfl" Source="$(var.BinDir)\OFL-craft-fonts.txt" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>

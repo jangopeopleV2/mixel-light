@@ -6,6 +6,31 @@
 use std::path::Path;
 use std::process::Command;
 
+use sha2::{Digest, Sha256};
+
+/// Immutable two-face UI subset and complete licence bytes from the release's
+/// craft-fonts pin. Metadata alone cannot re-attest arbitrary changed files.
+const BUNDLED_FONT_PINS: &[(&str, &str)] = &[
+    ("fonts/manifest.txt", "ea683de890dfc38307d629de43d7acbe0ced6cdf27982b0e0ab21273665848b9"),
+    ("fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf", "258d7156c165f2ff774b6efee637c22c3b950de0d8a10e501137061bc8085d01"),
+    ("fonts/biz-ud-pgothic/OFL.txt", "e753d7155d53c747d037a445e584c8ecfca6dd79846db610417e282a736b28bc"),
+    ("fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf", "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b"),
+    ("fonts/noto-sans-cjk-sc/OFL.txt", "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"),
+];
+
+fn check_pinned_files(directory: &Path, pins: &[(&str, &str)]) -> Vec<String> {
+    pins.iter()
+        .filter_map(|(name, expected)| {
+            let path = directory.join(name);
+            match std::fs::read(&path) {
+                Ok(bytes) if format!("{:x}", Sha256::digest(&bytes)) == *expected => None,
+                Ok(_) => Some(format!("{}: SHA-256 differs from the audited font pin", path.display())),
+                Err(error) => Some(format!("{}: pinned font input missing or unreadable: {error}", path.display())),
+            }
+        })
+        .collect()
+}
+
 /// Extensions treated as assets (lower-case).
 const ASSET_EXT: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico", "icns", "bmp", "ttf", "otf", "woff", "woff2", "wav", "mp3", "ogg", "flac", "mp4",
@@ -91,7 +116,8 @@ pub fn run(root: &Path) -> Result<(), String> {
     }
     let files: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().filter(|f| root.join(f).exists()).map(str::to_string).collect();
     let md = std::fs::read_to_string(root.join("assets/ATTRIBUTION.md")).map_err(|e| format!("assets/ATTRIBUTION.md: {e}"))?;
-    let problems = check(&files, &md, |p| root.join(p).exists());
+    let mut problems = check(&files, &md, |p| root.join(p).exists());
+    problems.extend(check_pinned_files(&root.join("mixel/vendor/craft-fonts"), BUNDLED_FONT_PINS));
     if problems.is_empty() {
         let n = files
             .iter()
@@ -132,5 +158,19 @@ mod tests {
         assert!(p.iter().any(|m| m.contains("Adobe-Foo.otf: asset name")));
         assert!(p.iter().any(|m| m.contains("OFL-Foo.txt")));
         assert!(!p.iter().any(|m| m.starts_with("assets/fonts/Foo-Bold.ttf") || m.starts_with("crates/scenes") || m.starts_with("src/")));
+    }
+
+    #[test]
+    fn pinned_font_inputs_reject_tampering_and_missing_licences() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-font-pin-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("font.txt");
+        std::fs::write(&file, b"audited original").unwrap();
+        let hash = format!("{:x}", Sha256::digest(b"audited original"));
+        assert!(check_pinned_files(&dir, &[("font.txt", &hash)]).is_empty());
+        std::fs::write(&file, b"tampered bytes").unwrap();
+        assert_eq!(check_pinned_files(&dir, &[("font.txt", &hash)]).len(), 1);
+        assert_eq!(check_pinned_files(&dir, &[("OFL.txt", &hash)]).len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

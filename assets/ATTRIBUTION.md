@@ -8,6 +8,8 @@ covers a whole directory), or if a licence file referenced in the Licence column
 
 | Path | Asset | Creator | Source | Licence | Added | Modifications |
 |---|---|---|---|---|---|---|
+| `mixel/vendor/craft-fonts/fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf` | BIZ UDPGothic Regular, default Japanese UI and watermark fallback | The BIZ UDGothic Project Authors (Morisawa Inc.) | https://github.com/storytold/craft-fonts/blob/8dcdacd5153e64560d109541a47d806f26f048c0/fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf ; original https://github.com/googlefonts/morisawa-biz-ud-gothic/tree/18934af56b9c003ca58c54bffbf226848cb11032 | SIL Open Font License 1.1 (`mixel/vendor/craft-fonts/fonts/biz-ud-pgothic/OFL.txt`) | 2026-10-13 | none; byte-identical pinned subset; SHA-256 258d7156c165f2ff774b6efee637c22c3b950de0d8a10e501137061bc8085d01 |
+| `mixel/vendor/craft-fonts/fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf` | Noto Sans CJK SC Regular, default Simplified/Traditional Chinese UI fallback | The Noto Project Authors (Google and Adobe); explicit unmodified Noto CJK exception in AGENTS.md | https://github.com/storytold/craft-fonts/blob/8dcdacd5153e64560d109541a47d806f26f048c0/fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf ; original https://github.com/notofonts/noto-cjk/tree/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese | SIL Open Font License 1.1 (`mixel/vendor/craft-fonts/fonts/noto-sans-cjk-sc/OFL.txt`) | 2026-10-13 | none; byte-identical pinned subset; SHA-256 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b |
 | `assets/fonts/Inter-*.ttf` (Regular, Medium, SemiBold) | Inter | Rasmus Andersson | https://github.com/rsms/inter | SIL Open Font License 1.1 (`assets/fonts/OFL-Inter.txt`) | 2026-09-30 | none |
 | `assets/app-icon/` (`lightcraft.svg` and the PNG/ICNS/ICO/SVG files derived from it) | LightCraft app icon (lynx) | LightCraft project owner (drawn in ArtCraft) | original work (vectorised from the owner's drawing; see `assets/app-icon/README.md`) | MIT OR Apache-2.0 (`assets/app-icon/LICENSE.txt`) | 2026-10-02 | vectorised to SVG; rendered to PNG/ICNS/ICO by `packaging/icons.sh` |
 | `assets/camera-profiles/*.json` | Camera colour profiles (matrix + hue/saturation/value table), built into LightCraft | ILCE-7M4: Harald Hoyer | original work: fitted by `lightcraft-cli calibrate` to the contributor's own raw photos and their in-camera JPEGs (597 ILCE-7M4 photos, 2026); aggregate colour statistics only, no image content; no Adobe or third-party profile data | MIT OR Apache-2.0 | 2026-10-07 | none |
@@ -30,7 +32,9 @@ covers a whole directory), or if a licence file referenced in the Licence column
 Notes
 - Fonts authored or published by Adobe (Source Sans/Serif/Code, Source Han, …) are not used, even though some are
   OFL-licensed: the asset rule excludes anything from Adobe. Source Sans 3 was removed on 2026-09-30 and replaced by Inter.
-- CJK fonts (BIZ UDPGothic, BIZ UDMincho, Shippori Mincho, Noto Sans CJK SC) are not in this repository. They live in
-  [storytold/craft-fonts](https://github.com/storytold/craft-fonts), with their licences and attribution in its
-  `ATTRIBUTION.md`, and are embedded only in builds made with the optional `CRAFT_FONTS_DIR` build input (all official
-  releases). Never commit font files here; add new fonts to craft-fonts (craftrules `standards/fonts.md`).
+- MIXEL's narrow Phase 0 reproducibility exception vendors exactly the two unmodified Regular UI faces above
+  from the immutable craft-fonts release pin. Their complete OFL notices travel with every package; the mandatory
+  asset gate verifies both font files, both licence files and the two-entry manifest against fixed SHA-256 pins.
+  Noto CJK uses the existing explicit maintainer-approved exception; this permits no Adobe Source font.
+  `CRAFT_FONTS_DIR` still overrides the default with an external craft-fonts checkout. Additional document fonts
+  remain in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), with their own licences and attribution.

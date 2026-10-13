@@ -4,8 +4,11 @@
 
 use std::io::{BufRead, BufReader, Cursor, Write};
 use std::net::TcpListener;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-use lightcraft_mcp::{Backend, Headless, Remote, Server, base64_decode};
+use lightcraft_mcp::{Backend, Headless, ProgressHook, Remote, Server, base64_decode};
 use serde_json::{Value, json};
 
 /// Feed a whole session through `Server::serve` and return the replies by id.
@@ -154,8 +157,50 @@ fn remote_unreachable_is_a_tool_error() {
     assert!(r[0]["result"]["content"][0]["text"].as_str().unwrap().contains("not reachable"));
 }
 
+/// [`Headless`] whose batch export, while `hold` is set, waits once its first photo is written:
+/// it keeps asking the server's progress hook at that photo boundary (which answers pings and
+/// reads cancels meanwhile) until the request is cancelled or the test clears `hold`. A ping or
+/// cancel sent after the first progress then lands mid-batch, however fast the machine exports.
+struct HoldAfterFirst {
+    inner: Headless,
+    hold: Arc<AtomicBool>,
+}
+
+impl Backend for HoldAfterFirst {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.inner.call(method, params)
+    }
+
+    fn has_ui(&self) -> bool {
+        self.inner.has_ui()
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+
+    fn set_progress(&mut self, hook: Option<ProgressHook>) {
+        let hold = self.hold.clone();
+        self.inner.set_progress(hook.map(|mut hook| -> ProgressHook {
+            Box::new(move |done, total, name| {
+                // bounded, so a cancel that is never read fails the test instead of hanging it
+                let until = Instant::now() + Duration::from_secs(20);
+                while done == 1 && done < total && hold.load(Ordering::SeqCst) && Instant::now() < until {
+                    if !hook(done, total, name) {
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                hook(done, total, name)
+            })
+        }));
+    }
+}
+
 /// Real stdio framing and real atomic exports: progress, ping during a batch, cancellation
 /// between complete photos, unrelated output preservation, and a usable session afterwards.
+/// Both exports wait after their first photo ([`HoldAfterFirst`]) until the ping is answered or
+/// the cancel is read, so neither can finish first on a fast machine.
 #[test]
 fn export_progress_and_cancel() {
     let dir = std::env::temp_dir().join(format!("lc-mcp-progress-{}", std::process::id()));
@@ -163,7 +208,9 @@ fn export_progress_and_cancel() {
     std::fs::create_dir_all(&dir).unwrap();
     let (input, mut send) = std::io::pipe().unwrap();
     let (output, write) = std::io::pipe().unwrap();
-    let server = std::thread::spawn(move || Server::new(Box::new(Headless::demo())).serve(BufReader::new(input), write).unwrap());
+    let hold = Arc::new(AtomicBool::new(true));
+    let backend = HoldAfterFirst { inner: Headless::demo(), hold: hold.clone() };
+    let server = std::thread::spawn(move || Server::new(Box::new(backend)).serve(BufReader::new(input), write).unwrap());
     let (tx, rx) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
         for line in BufReader::new(output).lines() {
@@ -173,7 +220,7 @@ fn export_progress_and_cancel() {
             }
         }
     });
-    let next = || rx.recv_timeout(std::time::Duration::from_secs(30)).expect("MCP reply/progress");
+    let next = || rx.recv_timeout(Duration::from_secs(30)).expect("MCP reply/progress");
     writeln!(send, "{}", call(1, "query_photos", json!({"limit":8}))).unwrap();
     let query = next();
     let ids: Vec<_> = query["result"]["structuredContent"]["photos"].as_array().unwrap().iter().map(|p| p["id"].clone()).collect();
@@ -197,6 +244,8 @@ fn export_progress_and_cancel() {
             }
         } else if value["id"] == 3 {
             answered = true;
+            // the ping was answered mid-batch: let the export run to the end
+            hold.store(false, Ordering::SeqCst);
         } else {
             assert_eq!(value["id"], 2, "{value}");
             assert_eq!(value["result"]["isError"], false, "{value}");
@@ -206,63 +255,37 @@ fn export_progress_and_cancel() {
     }
     assert!(notes >= 2 && answered, "{notes} progress messages; ping answered {answered}");
     assert_eq!(last, 8.0);
-    // A cancel can lose the race with the batch's last photos on a fast many-core machine (MCP
-    // allows a reply to a request that completed before its cancellation arrived): then the batch
-    // must be complete, and the cancel is tried again on a fresh batch.
-    let (mut out, mut decoy) = (dir.clone(), dir.clone());
-    let mut cancelled = false;
-    for attempt in 0..10u64 {
-        let (export_id, inspect_id) = (4 + 2 * attempt, 5 + 2 * attempt);
-        out = dir.join(format!("cancelled-{attempt}"));
-        std::fs::create_dir_all(&out).unwrap();
-        decoy = out.join("photo999.png");
-        std::fs::write(&decoy, b"unrelated existing output").unwrap();
-        let mut request = call(export_id, "command_run", json!({"id":"app.export","params":{"ids":ids,"dir":out,"longEdge":1200,"format":"png"}}));
-        request["params"]["_meta"] = json!({"progressToken":44});
-        writeln!(send, "{request}").unwrap();
-        let mut finished = false;
-        loop {
-            let value = next();
-            if value["id"] == export_id {
-                finished = true;
-                break;
-            }
-            assert_eq!(value["params"]["progressToken"], 44, "{value}");
-            if value["params"]["progress"].as_f64().unwrap() > 0.0 {
-                break;
-            }
-        }
-        if !finished {
-            writeln!(send, "{}", json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":export_id}})).unwrap();
-        }
-        writeln!(send, "{}", call(inspect_id, "doc_inspect", json!({}))).unwrap();
-        loop {
-            let value = next();
-            if value["method"] == "notifications/progress" {
-                continue;
-            }
-            if value["id"] == export_id {
-                // Completed before the cancellation took effect: every photo is there.
-                assert_eq!(value["result"]["isError"], false, "{value}");
-                finished = true;
-                continue;
-            }
-            assert_eq!(value["id"], inspect_id, "{value}");
-            assert_eq!(value["result"]["isError"], false);
+    let out = dir.join("cancelled");
+    std::fs::create_dir_all(&out).unwrap();
+    let decoy = out.join("photo999.png");
+    std::fs::write(&decoy, b"unrelated existing output").unwrap();
+    // this export waits after its first photo until the cancel below is read
+    hold.store(true, Ordering::SeqCst);
+    let mut request = call(4, "command_run", json!({"id":"app.export","params":{"ids":ids,"dir":out,"longEdge":1200,"format":"png"}}));
+    request["params"]["_meta"] = json!({"progressToken":44});
+    writeln!(send, "{request}").unwrap();
+    loop {
+        let value = next();
+        assert_ne!(value["id"], 4, "must be cancellable before completion: {value}");
+        assert_eq!(value["params"]["progressToken"], 44, "{value}");
+        if value["params"]["progress"].as_f64().unwrap() > 0.0 {
             break;
         }
-        if finished {
-            let n = std::fs::read_dir(&out).unwrap().filter(|e| e.as_ref().unwrap().path() != decoy).count();
-            assert_eq!(n, ids.len(), "a batch that replied is complete");
+    }
+    writeln!(send, "{}", json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":4}})).unwrap();
+    writeln!(send, "{}", call(5, "doc_inspect", json!({}))).unwrap();
+    loop {
+        let value = next();
+        if value["method"] == "notifications/progress" {
             continue;
         }
-        cancelled = true;
+        assert_eq!(value["id"], 5, "cancelled request must not reply: {value}");
+        assert_eq!(value["result"]["isError"], false);
         break;
     }
-    assert!(cancelled, "a cancellation never took effect before the batch completed");
     assert_eq!(std::fs::read(&decoy).unwrap(), b"unrelated existing output");
     let photos: Vec<_> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).filter(|p| *p != decoy).collect();
-    assert!(!photos.is_empty() && photos.len() < ids.len(), "only completed photos remain: {photos:?}");
+    assert_eq!(photos.len(), 1, "only the photo completed before the cancel remains: {photos:?}");
     for path in &photos {
         lightcraft_codecs::decode(&std::fs::read(path).unwrap(), Default::default()).expect("complete image, no partial/temp file");
     }

@@ -11,7 +11,9 @@ use lightcraft_engine::pipeline::PixelWindow;
 /// Windows start and end on multiples of this many pixels of the zoomed frame.
 pub const SNAP: usize = 256;
 /// The most context rendered beyond the visible pixels (a multiple of [`SNAP`]).
-pub const MAX_MARGIN: usize = 768;
+/// 4.5 % of an 11:1 view of a 24 MP frame, snapped to [`SNAP`]. The old 768 px cap left Dehaze
+/// tens of codes off the full-frame render from 4:1 up (#1146).
+pub const MAX_MARGIN: usize = 3072;
 /// The most a window may span on either axis: a bound on its texture whatever the window size.
 pub const MAX_SPAN: usize = if cfg!(target_arch = "wasm32") { 3072 } else { 6144 };
 
@@ -25,7 +27,7 @@ pub struct RegionView {
     pub key: u64,
     pub full: (usize, usize),
     pub window: PixelWindow,
-    /// Hash of the develop settings it was rendered with.
+    /// Hash of the render state it was rendered with (develop settings plus any window-safe overlay).
     pub settings: u64,
 }
 
@@ -72,9 +74,9 @@ pub struct ViewSizes {
     pub texture_side: usize,
     /// 1.0, or less while a slider is dragged (a draft of the whole-frame render).
     pub draft_scale: f32,
-    /// Whether a window can be drawn over the whole-frame render (not with an overlay, soft
-    /// proofing, or a read too far for one window): if not, the whole frame is rendered at the
-    /// size it is drawn.
+    /// Whether a window can be drawn over the whole-frame render (not with a diagnostic overlay
+    /// that needs whole-frame context, soft proofing, or a read too far for one window). Mask
+    /// overlays are window-safe.
     pub windows: bool,
 }
 
@@ -97,9 +99,9 @@ pub fn plan(settings: &crate::state::AppSettings, v: ViewSizes) -> LoupePlan {
     let drawn_long = if v.drawn_long.is_finite() { v.drawn_long.max(8.0) } else { canvas_long };
     let scale = if v.draft_scale.is_finite() { v.draft_scale.clamp(0.1, 1.0) } else { 1.0 };
     if !v.windows {
-        // the whole frame at the size it is drawn (an overlay or soft proof has no window); while a
-        // slider drags, a canvas-sized draft as with windows: a drag at 1:1 must not render the
-        // photo's every pixel each frame
+        // the whole frame at the size it is drawn (soft proof or a whole-frame diagnostic has no
+        // window); while a slider drags, a canvas-sized draft as with windows: a drag at 1:1 must
+        // not render the photo's every pixel each frame
         let long = if scale < 1.0 { drawn_long.min(canvas_long) } else { drawn_long };
         let main_edge = settings.loupe_edge(long * scale, v.native_long, v.texture_side);
         return LoupePlan { main_edge, window_edge: None };
@@ -281,8 +283,9 @@ mod tests {
         assert_eq!(drag.window_edge, still.window_edge);
     }
 
-    // Given no window (an overlay, soft proofing), the view at rest renders the whole frame at the
-    // size it is drawn, but a slider drag drafts at the canvas size like the windowed path
+    // Given no window (a whole-frame diagnostic or soft proofing), the view at rest renders the
+    // whole frame at the size it is drawn, but a slider drag drafts at the canvas size like the
+    // windowed path
     #[test]
     fn without_a_window_a_drag_drafts_at_the_canvas_size() {
         let no_window = |draft_scale: f32| ViewSizes { windows: false, draft_scale, ..sizes(24000.0, 2800.0, 6000) };
@@ -331,8 +334,8 @@ mod tests {
         }
     }
 
-    // Given a mode whose picture can't be a window (a mask overlay, soft proofing, a spot read too
-    // far for one render), the whole-frame render is as big as the view, as it was before windows
+    // Given a mode whose picture can't be a window (soft proofing, a whole-frame diagnostic, or a
+    // spot read too far for one render), the whole-frame render is as big as the view
     #[test]
     fn without_windows_the_whole_frame_is_rendered_at_the_drawn_size() {
         let p = plan(&auto(), ViewSizes { windows: false, ..sizes(6000.0, 2800.0, 6000) });
@@ -483,7 +486,8 @@ mod tests {
     fn the_margin_grows_with_the_zoom_up_to_a_cap() {
         assert_eq!(margin_for(1000), SNAP, "never less than one grid step");
         assert!(margin_for(8000) > margin_for(3000));
-        assert_eq!(margin_for(48_000), MAX_MARGIN);
+        assert_eq!(margin_for(48_000), 2304, "4.5 % of an 8:1 frame, under the cap");
+        assert_eq!(margin_for(80_000), MAX_MARGIN);
         assert_eq!(margin_for(0), SNAP);
         assert!(margin_for(usize::MAX) <= MAX_MARGIN);
         for l in [100, 3000, 8000, 48_000, 400_000] {

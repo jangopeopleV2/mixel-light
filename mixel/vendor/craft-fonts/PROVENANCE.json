@@ -1,0 +1,79 @@
+{
+  "craft_fonts_revision": "8dcdacd5153e64560d109541a47d806f26f048c0",
+  "upstream_manifest_sha256": "3bb90a214de61317ffaadf2c7f3035224c498b4bbc2165798f983e8f982aa092",
+  "files": {
+    "fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf": {
+      "file": "fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf",
+      "url": "https://raw.githubusercontent.com/storytold/craft-fonts/8dcdacd5153e64560d109541a47d806f26f048c0/fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf",
+      "sha256": "258d7156c165f2ff774b6efee637c22c3b950de0d8a10e501137061bc8085d01",
+      "bytes": 4669688,
+      "manifest_sha256_match": true
+    },
+    "fonts/biz-ud-pgothic/OFL.txt": {
+      "file": "fonts/biz-ud-pgothic/OFL.txt",
+      "url": "https://raw.githubusercontent.com/storytold/craft-fonts/8dcdacd5153e64560d109541a47d806f26f048c0/fonts/biz-ud-pgothic/OFL.txt",
+      "sha256": "e753d7155d53c747d037a445e584c8ecfca6dd79846db610417e282a736b28bc",
+      "bytes": 4408,
+      "manifest_sha256_match": true
+    },
+    "fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf": {
+      "file": "fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf",
+      "url": "https://raw.githubusercontent.com/storytold/craft-fonts/8dcdacd5153e64560d109541a47d806f26f048c0/fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf",
+      "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+      "bytes": 16437364,
+      "manifest_sha256_match": true
+    },
+    "fonts/noto-sans-cjk-sc/OFL.txt": {
+      "file": "fonts/noto-sans-cjk-sc/OFL.txt",
+      "url": "https://raw.githubusercontent.com/storytold/craft-fonts/8dcdacd5153e64560d109541a47d806f26f048c0/fonts/noto-sans-cjk-sc/OFL.txt",
+      "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+      "bytes": 4301,
+      "manifest_sha256_match": true
+    }
+  },
+  "font_inspection": [
+    {
+      "family": "BIZ UDPGothic",
+      "style": "Regular",
+      "path": "/Volumes/MAC_Mini_Ext/Project_Mixel/mixel-craft/mixel-light/mixel/vendor/craft-fonts/fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf",
+      "sha256": "258d7156c165f2ff774b6efee637c22c3b950de0d8a10e501137061bc8085d01",
+      "names": {
+        "1": [
+          "BIZ UDPGothic",
+          "BIZ UDP\u30b4\u30b7\u30c3\u30af"
+        ],
+        "2": [
+          "Regular"
+        ],
+        "6": [
+          "BIZUDPGothic-Regular"
+        ]
+      },
+      "glyphs_checked": "\u65e5\u672c\u8a9e\u306e\u6587\u5b57",
+      "glyphs_present": true,
+      "sfntVersionHex": "00010000"
+    },
+    {
+      "family": "Noto Sans CJK SC",
+      "style": "Regular",
+      "path": "/Volumes/MAC_Mini_Ext/Project_Mixel/mixel-craft/mixel-light/mixel/vendor/craft-fonts/fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf",
+      "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+      "names": {
+        "1": [
+          "Noto Sans CJK SC"
+        ],
+        "2": [
+          "Regular"
+        ],
+        "6": [
+          "NotoSansCJKsc-Regular"
+        ]
+      },
+      "glyphs_checked": "\u7167\u7247\u4e2d\u6587\u7b80\u4f53\u7e41\u9ad4",
+      "glyphs_present": true,
+      "sfntVersionHex": "4f54544f"
+    }
+  ],
+  "modifications": "None to font binaries or OFL notices; manifest contains only the two required Regular UI faces.",
+  "allowed_noto_cjk_exception": "mixel-light/AGENTS.md:70-75; maintainer decision 2026-10-07"
+}

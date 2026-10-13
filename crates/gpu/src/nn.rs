@@ -86,6 +86,8 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
     desc.backends = backends;
     // DX12 shaders compile with FXC (issue #471)
     desc.backend_options = crate::backend::backend_options();
+    // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
+    desc.flags = crate::backend::instance_flags_from_env(desc.flags);
     let instance = wgpu::Instance::new(desc);
     let wanted = std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
     let adapter = match &wanted {
@@ -670,7 +672,8 @@ pub fn runner(net: &Net, tile: usize) -> Result<NetRunner, String> {
         d.device.push_error_scope(wgpu::ErrorFilter::Validation),
         d.device.push_error_scope(wgpu::ErrorFilter::Internal),
     ];
-    let pipes = build_pipelines(d, &layout);
+    // the driver compiles the kernels here: a crash in it is reported at the next launch (issue #250)
+    let pipes = crate::backend::with_marker("denoise kernel compilation", || build_pipelines(d, &layout));
     let weights: Vec<(wgpu::Buffer, wgpu::Buffer)> = layers
         .iter()
         .map(|l| {
@@ -901,7 +904,11 @@ mod tests {
 
     /// The runner, or `None` (with a note) on a machine with no usable GPU.
     fn gpu(net: &Net, tile: usize) -> Option<NetRunner> {
-        match runner(net, tile) {
+        let built = {
+            let _turn = crate::backend::marker_test_guard();
+            runner(net, tile)
+        };
+        match built {
             Ok(r) => Some(r),
             Err(e) => {
                 eprintln!("skipped: no GPU runner here ({e})");
@@ -982,7 +989,10 @@ mod tests {
         let net = onnx::read(std::path::Path::new(&model)).unwrap();
         let tile = 512usize;
         let started = Instant::now();
-        let g = runner(&net, tile).unwrap();
+        let g = {
+            let _turn = crate::backend::marker_test_guard();
+            runner(&net, tile).unwrap()
+        };
         println!("{}: set up in {:.2} s, {:.0} MB per tile in flight", g.adapter(), started.elapsed().as_secs_f64(), g.bytes_per_tile() as f64 / 1e6);
         println!("kernels: {}", g.build_report());
         let manifest = DenoiserManifest {
@@ -1049,6 +1059,7 @@ mod tests {
             .replace("{{BN}}", &bn.to_string())
             .replace("{{BK}}", &bk.to_string())
             .replace("{{B_VECS}}", &(bk * bn / 4).to_string());
+        let _turn = crate::backend::marker_test_guard();
         let d = dev().unwrap();
         let layout = conv_bgl(d);
         let started = std::time::Instant::now();

@@ -115,6 +115,20 @@ Copy-Item (Join-Path $Bin 'lightcraft.exe'), (Join-Path $Bin 'lightcraft-cli.exe
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'lightcraft.exe') (Join-Path $Stage 'lightcraft-cli.exe')
 
+# MSI installs the complete selected font licences too. Preserve the original
+# licence bytes, including every copyright notice, in a single installed file.
+$FontsDir = if ($env:CRAFT_FONTS_DIR) { $env:CRAFT_FONTS_DIR } else { Join-Path $Root 'mixel\vendor\craft-fonts' }
+$FontLicences = @(Get-ChildItem -Path (Join-Path $FontsDir 'fonts\*\OFL.txt'))
+if ($FontLicences.Count -eq 0) { throw 'No OFL notices found for the selected CJK fonts' }
+$FontNotice = [IO.File]::Create((Join-Path $Stage 'OFL-craft-fonts.txt'))
+try {
+  foreach ($lic in $FontLicences) {
+    $bytes = [IO.File]::ReadAllBytes($lic.FullName)
+    $FontNotice.Write($bytes, 0, $bytes.Length)
+    $FontNotice.WriteByte(10)
+  }
+} finally { $FontNotice.Dispose() }
+
 # ---- MSI ---------------------------------------------------------------------------------------
 # Extensions must match the WiX tool version (5.0.2, see release.yml). Re-adding is harmless.
 $WixVersion = '5.0.2'
@@ -151,11 +165,9 @@ foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE'
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
 }
-# Builds made with CRAFT_FONTS_DIR (storytold/craft-fonts) embed its fonts: ship their OFL licences.
-if ($env:CRAFT_FONTS_DIR) {
-  Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts\*\OFL.txt') -ErrorAction SilentlyContinue | ForEach-Object {
-    Copy-Item $_.FullName (Join-Path $Portable "OFL-$($_.Directory.Name).txt")
-  }
+# Ship the full OFLs for either the external override or the pinned default subset.
+Get-ChildItem -Path (Join-Path $FontsDir 'fonts\*\OFL.txt') | ForEach-Object {
+  Copy-Item $_.FullName (Join-Path $Portable "OFL-$($_.Directory.Name).txt")
 }
 $Zip = Join-Path $Dist "lightcraft-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
