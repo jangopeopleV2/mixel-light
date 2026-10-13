@@ -4,21 +4,29 @@
 //! removable or network drive.  This task keeps that work off the owner thread, commits prepared
 //! data only on the owner thread, then finishes the archive index on a worker.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, mpsc};
 
+#[cfg(not(target_arch = "wasm32"))]
 use lightcraft_engine::activity::{Cancel, TaskGuard};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(not(target_arch = "wasm32"))]
+use serde_json::json;
 
 use crate::LightcraftApp;
 
 #[derive(Clone, Copy)]
+#[cfg(not(target_arch = "wasm32"))]
 enum Kind {
     Inspect,
     Import,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 enum Message {
     Inspected(Result<Value, String>),
     Prepared(Result<Box<lightcraft_engine::lightroom_job::PreparedLightroom>, String>),
@@ -26,6 +34,7 @@ enum Message {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(not(target_arch = "wasm32"))]
 enum Phase {
     Reading,
     Committing,
@@ -33,6 +42,7 @@ enum Phase {
 }
 
 /// A Lightroom task in flight.  The receiver is polled from the egui owner thread; the activity stack shows it.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct LightroomTask {
     kind: Kind,
     path: PathBuf,
@@ -45,6 +55,11 @@ pub struct LightroomTask {
     guard: TaskGuard,
 }
 
+/// Browser commands reject catalog imports, so no in-flight Lightroom task can exist there.
+#[cfg(target_arch = "wasm32")]
+pub type LightroomTask = std::convert::Infallible;
+
+#[cfg(not(target_arch = "wasm32"))]
 impl LightroomTask {
     #[cfg(not(target_arch = "wasm32"))]
     fn new(
@@ -117,6 +132,7 @@ impl LightroomTask {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for LightroomTask {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
@@ -208,15 +224,6 @@ fn spawn_finalize(
         .map_err(|e| format!("could not start Lightroom archive finalization: {e}"))
 }
 
-#[cfg(target_arch = "wasm32")]
-fn spawn_finalize(
-    _finalization: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
-    _tx: mpsc::Sender<Message>,
-    _ctx: egui::Context,
-) -> Result<(), String> {
-    unsupported_wasm().map(|_| ())
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn inspect_report(data: lightcraft_engine::lightroom_catalog::CatalogImport) -> Value {
     json!({
@@ -228,6 +235,7 @@ fn inspect_report(data: lightcraft_engine::lightroom_catalog::CatalogImport) -> 
 }
 
 /// The task is over: keep its result (with the catalog's `path`) for `status` and say how it went.
+#[cfg(not(target_arch = "wasm32"))]
 fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, mut value: Value) {
     let kind = task.kind;
     if let Some(o) = value.as_object_mut() {
@@ -338,6 +346,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value, ctx: &egui::Context
 }
 
 /// Poll owner-thread work, commit a prepared import, and finish its archive index.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(mut task) = app.lightroom.take() else { return };
     let message = match task.rx.try_recv() {
@@ -437,6 +446,10 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     ctx.request_repaint();
 }
+
+/// Browser builds cannot start a Lightroom task; there is no owner-thread work to poll.
+#[cfg(target_arch = "wasm32")]
+pub fn tick(_app: &mut LightcraftApp, _ctx: &egui::Context) {}
 
 /// Wait for a task in control/headless mode while still applying owner-thread completion.
 #[cfg(not(target_arch = "wasm32"))]

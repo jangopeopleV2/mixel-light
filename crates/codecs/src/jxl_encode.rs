@@ -3,7 +3,9 @@
 //! encoding the decoder renders back to; lossless files are Modular and keep their samples as they
 //! are, tagged with the ICC profile when one is given. EXIF and XMP go in `Exif` / `xml ` boxes.
 
-use crate::encode::{EncodeImage, EncodeMeta, HDR_REFERENCE_WHITE_NITS, Samples, pq_encode};
+use crate::encode::{EncodeImage, EncodeMeta};
+#[cfg(all(feature = "jxl", not(target_arch = "wasm32")))]
+use crate::encode::{HDR_REFERENCE_WHITE_NITS, Samples, pq_encode};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
@@ -40,7 +42,7 @@ pub enum JxlColour {
     /// Rec. 2020 primaries with the BT.709 curve.
     Rec2020,
     /// HDR: Rec. 2020 primaries with the PQ curve (SMPTE ST 2084). Float samples are linear light
-    /// with SDR white at 1.0 (written with SDR white at [`HDR_REFERENCE_WHITE_NITS`]); 16-bit
+    /// with SDR white at 1.0 (written with SDR white at [`crate::encode::HDR_REFERENCE_WHITE_NITS`]); 16-bit
     /// samples are already PQ-encoded.
     Rec2020Pq,
 }
