@@ -340,6 +340,31 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
     Ok((kind, finish))
 }
 
+fn resolve_merge_sources(
+    sources: Vec<(PhotoId, String)>,
+    resolve: impl Fn(&str) -> std::result::Result<std::path::PathBuf, String>,
+) -> std::result::Result<Vec<(PhotoId, String)>, String> {
+    sources
+        .into_iter()
+        .map(|(id, path)| {
+            let actual = resolve(&path)?;
+            let actual = actual.to_str().ok_or("A resolved merge source path is not valid Unicode")?.to_owned();
+            Ok((id, actual))
+        })
+        .collect()
+}
+
+fn require_merge_folder(first: &str, granted: impl Fn(&std::path::Path) -> bool) -> std::result::Result<(), String> {
+    let parent = std::path::Path::new(first).parent().ok_or("The merge source has no containing folder")?;
+    if !granted(parent) {
+        return Err(format!(
+            "Select the source folder {} with the folder picker before saving the merged DNG beside its originals",
+            parent.display()
+        ));
+    }
+    Ok(())
+}
+
 impl Session {
     /// Plan a merge of `ids` (catalog order of the given ids is kept).
     pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
@@ -354,6 +379,10 @@ impl Session {
         if sources.len() < kind.min_photos() {
             return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
         }
+        let sources = resolve_merge_sources(sources, |path| crate::macos_mas::resolve(path)).map_err(EngineError::Other)?;
+        if !preview && let Some((_, first)) = sources.first() {
+            require_merge_folder(first, |folder| crate::macos_mas::directory_granted(folder)).map_err(EngineError::Other)?;
+        }
         let read: ByteReader = match &self.media.file_bytes {
             Some(r) => r.clone(),
             None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
@@ -364,7 +393,9 @@ impl Session {
     /// Write a finished (non-preview) merge next to its first source, import it, select it and
     /// apply Auto Settings / the auto crop. Returns `{id, path, …info}`.
     pub fn finish_merge(&mut self, job: &MergeJob, out: MergeOutput) -> Result<Value> {
-        let first = &job.sources.first().ok_or_else(|| EngineError::Other("nothing merged".into()))?.1;
+        let sources = resolve_merge_sources(job.sources.clone(), |path| crate::macos_mas::resolve(path)).map_err(EngineError::Other)?;
+        let first = &sources.first().ok_or_else(|| EngineError::Other("nothing merged".into()))?.1;
+        require_merge_folder(first, |folder| crate::macos_mas::directory_granted(folder)).map_err(EngineError::Other)?;
         // a new file under a free name (never replacing one), complete and synced before it appears
         let path = lightcraft_catalog::safe_file::write_new_unique(&mut output_names(first, job.kind.suffix()), &out.dng)
             .map_err(|e| EngineError::Other(format!("could not write the merged DNG next to {first}: {e}")))?
@@ -406,5 +437,25 @@ impl Session {
         let job = self.plan_merge(kind, finish, ids, false)?;
         let out = job.run(&|_, _| true).map_err(EngineError::Other)?;
         self.finish_merge(&job, out)
+    }
+}
+
+#[cfg(test)]
+mod sandbox_path_tests {
+    use super::*;
+    #[test]
+    fn moved_sources_determine_both_worker_reads_and_merge_output_directory() {
+        let sources = vec![(PhotoId(3), "/old/a.dng".into()), (PhotoId(9), "/old/b.dng".into())];
+        let resolved = resolve_merge_sources(sources, |p| Ok(std::path::PathBuf::from(p.replacen("/old/", "/chosen/current/", 1)))).unwrap();
+        assert_eq!(resolved, vec![(PhotoId(3), "/chosen/current/a.dng".into()), (PhotoId(9), "/chosen/current/b.dng".into())]);
+        assert_eq!(output_names(&resolved[0].1, "HDR").next().unwrap(), std::path::Path::new("/chosen/current/a-HDR.dng"));
+        assert!(require_merge_folder(&resolved[0].1, |p| p == std::path::Path::new("/chosen/current")).is_ok());
+    }
+    #[test]
+    fn denied_source_or_file_only_grant_stops_before_merge_output() {
+        let sources = vec![(PhotoId(3), "/old/a.dng".into())];
+        assert!(resolve_merge_sources(sources, |_| Err("reselect denied source".into())).unwrap_err().contains("reselect"));
+        let error = require_merge_folder("/chosen/a.dng", |_| false).unwrap_err();
+        assert!(error.contains("Select the source folder /chosen"));
     }
 }

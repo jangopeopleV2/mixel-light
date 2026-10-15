@@ -249,13 +249,23 @@ impl SourceRef {
     }
 
     pub fn load_source(&self) -> Result<DecodedSource, String> {
+        self.load_source_resolving(&|path| {
+            crate::macos_mas::resolve(path)?.to_str().map(str::to_owned).ok_or_else(|| "Resolved photo path is not valid Unicode".into())
+        })
+    }
+
+    fn load_source_resolving(&self, resolve: &impl Fn(&str) -> Result<String, String>) -> Result<DecodedSource, String> {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
             SourceRef::File { path, max_edge, loader, fallback, denoise } => {
-                let plain = || match loader {
-                    Some(l) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
-                    None => Err(format!("no decoder available for {path}")),
+                let resolved = resolve(path);
+                let plain = || {
+                    let path = resolved.as_deref().map_err(Clone::clone)?;
+                    match loader {
+                        Some(l) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                        None => Err(format!("no decoder available for {path}")),
+                    }
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
                 // pair loader gives the plain picture alone (the cached file is never a reason to fail a render)
@@ -268,7 +278,7 @@ impl SourceRef {
                             None => true,
                         };
                         if made {
-                            pair(path, *max_edge, spec).and_then(|(image, twin, info)| {
+                            resolved.as_deref().map_err(Clone::clone).and_then(|path| pair(path, *max_edge, spec)).and_then(|(image, twin, info)| {
                                 if spec.make.is_some() && twin.is_none() {
                                     return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
                                 }
@@ -288,14 +298,22 @@ impl SourceRef {
                 // An offline original renders from its smart preview (no decoder facts: header ones).
                 return match (r, fallback) {
                     #[cfg(not(target_arch = "wasm32"))]
-                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) && crate::smart::is_valid(sp) => {
-                        crate::smart::load(sp).map_err(|e2| format!("{e}; smart preview: {e2}"))
+                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) => {
+                        let actual = resolve(sp.to_str().ok_or("Smart preview path is not valid Unicode")?)?;
+                        if crate::smart::is_valid(std::path::Path::new(&actual)) {
+                            crate::smart::load(std::path::Path::new(&actual)).map_err(|e2| format!("{e}; smart preview: {e2}"))
+                        } else {
+                            Err(e)
+                        }
                     }
                     (r, _) => r,
                 };
             }
             #[cfg(not(target_arch = "wasm32"))]
-            SourceRef::Smart { path } => return crate::smart::load(path),
+            SourceRef::Smart { path } => {
+                let actual = resolve(path.to_str().ok_or("Smart preview path is not valid Unicode")?)?;
+                return crate::smart::load(std::path::Path::new(&actual));
+            }
             #[cfg(target_arch = "wasm32")]
             SourceRef::Smart { .. } => return Err("smart previews are not available here".into()),
         };
@@ -1983,5 +2001,30 @@ mod tests {
         let pv = s.preview_job(id, 800, 600, true, &a).unwrap();
         assert_ne!(pv.key, s.render_job(id, 800, 600, false, true).unwrap().key);
         assert_eq!(*pv.settings, a);
+    }
+}
+
+#[cfg(test)]
+mod sandbox_source_boundary_tests {
+    use super::*;
+    #[test]
+    fn source_worker_reads_resolved_path_and_never_calls_loader_when_denied() {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = calls.clone();
+        let source = SourceRef::File {
+            path: "/old/original.dng".into(),
+            max_edge: 16,
+            loader: Some(Arc::new(move |path, edge| {
+                recorded.lock().unwrap().push((path.to_owned(), edge));
+                Ok((Rgb32f::new(1, 1), SourceInfo::default()))
+            })),
+            fallback: None,
+            denoise: None,
+        };
+        source.load_source_resolving(&|_| Ok("/chosen/moved/original.dng".into())).unwrap();
+        assert_eq!(*calls.lock().unwrap(), [("/chosen/moved/original.dng".to_owned(), 16)]);
+        let error = source.load_source_resolving(&|_| Err("reselect denied original".into())).err().unwrap();
+        assert!(error.contains("reselect denied"));
+        assert_eq!(calls.lock().unwrap().len(), 1, "denied paths must never reach filesystem loaders");
     }
 }

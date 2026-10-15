@@ -19,6 +19,8 @@ pub mod journal;
 pub mod keywords;
 pub mod local;
 pub mod lock;
+#[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+pub mod macos_atomic;
 pub mod model;
 pub mod query;
 pub mod rules;

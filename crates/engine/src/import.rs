@@ -371,6 +371,38 @@ pub fn is_supported(path: &Path) -> bool {
     path.extension().is_some_and(|e| EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()))
 }
 
+fn import_path(path: &str) -> String {
+    match crate::macos_mas::resolve(path) {
+        Ok(actual) => actual.to_string_lossy().into_owned(),
+        // Keep a denied input in the report: its file probe returns the actionable access error.
+        Err(error) => {
+            log::warn!("import {path}: {error}");
+            path.to_owned()
+        }
+    }
+}
+
+fn resolved_transfer_paths(
+    source: &str,
+    destination: &Path,
+    moving: bool,
+    resolve: impl Fn(&Path) -> Result<PathBuf, String>,
+    directory_granted: impl Fn(&Path) -> bool,
+) -> Result<(String, PathBuf), String> {
+    let source = resolve(Path::new(source))?;
+    let destination = resolve(destination)?;
+    if !directory_granted(&destination) {
+        return Err(format!("Select destination folder {} with the folder picker before copying or moving photos", destination.display()));
+    }
+    if moving {
+        let parent = source.parent().ok_or("The source photo has no containing folder")?;
+        if !directory_granted(parent) {
+            return Err(format!("Select source folder {} with the folder picker before moving photos and their sidecars", parent.display()));
+        }
+    }
+    Ok((source.to_str().ok_or("The resolved source photo path is not valid Unicode")?.to_owned(), destination))
+}
+
 /// Expand files and folders (recursively) into supported files. `skip` (e.g. the library folder)
 /// is never descended into. Each folder's walk is bounded ([`crate::walk::Limits::default`]); a
 /// walk that stops at a bound is logged.
@@ -382,8 +414,11 @@ pub fn expand(paths: &[String], skip: Option<&Path>) -> Vec<String> {
 pub fn expand_within(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
+    let resolved_skip = skip.map(|p| crate::macos_mas::resolve(p).unwrap_or_else(|_| p.to_path_buf()));
+    let skip = resolved_skip.as_deref();
     for p in paths {
-        let p = Path::new(p);
+        let actual = import_path(p);
+        let p = Path::new(&actual);
         if skip.is_some_and(|s| p == s) {
             continue;
         }
@@ -570,7 +605,7 @@ impl ScanInput {
         for p in s.catalog.photos() {
             if let Source::File { path } = &p.source {
                 let c = ImportCandidate {
-                    path: path.clone(),
+                    path: import_path(path),
                     format: p.format.clone(),
                     kind: p.kind,
                     width: p.width,
@@ -581,7 +616,7 @@ impl ScanInput {
                     existing: Some(p.id.0),
                     ..Default::default()
                 };
-                by_path.insert(PathBuf::from(path), (p.id, c));
+                by_path.insert(PathBuf::from(import_path(path)), (p.id, c));
             }
             if let Some(h) = &p.content_hash {
                 by_hash.insert(h.clone(), p.id);
@@ -801,7 +836,7 @@ impl Prepared {
 }
 
 fn normalize_import_path(path: &str) -> String {
-    let path = path.replace('\\', "/");
+    let path = import_path(path).replace('\\', "/");
     if cfg!(windows) { path.to_lowercase() } else { path }
 }
 
@@ -817,7 +852,8 @@ impl ImportJob {
         if mode == ImportMode::Move && opts.local {
             return Err(crate::EngineError::Other("browsing a folder never moves its files".into()));
         }
-        let lib_dir = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
+        let lib_dir =
+            s.library.as_ref().filter(|l| l.on_disk).map(|l| crate::macos_mas::resolve(&l.dir)).transpose().map_err(crate::EngineError::Other)?;
         // where copies go: the chosen folder, else the library's Originals/
         let copy_root = opts
             .destination
@@ -825,6 +861,16 @@ impl ImportJob {
             .filter(|d| !d.trim().is_empty())
             .map(std::path::PathBuf::from)
             .or_else(|| lib_dir.as_ref().map(|l| l.join("Originals")));
+        let copy_root = copy_root.map(crate::macos_mas::resolve).transpose().map_err(crate::EngineError::Other)?;
+        if matches!(mode, ImportMode::Copy | ImportMode::Move)
+            && let Some(folder) = &copy_root
+            && !crate::macos_mas::directory_granted(folder)
+        {
+            return Err(crate::EngineError::Other(format!(
+                "Select destination folder {} with the folder picker before copying or moving photos",
+                folder.display()
+            )));
+        }
         if matches!(mode, ImportMode::Copy | ImportMode::Move) && copy_root.is_none() {
             return Err(crate::EngineError::Other("copying or moving needs a destination folder or an open library".into()));
         }
@@ -836,7 +882,7 @@ impl ImportJob {
                 continue;
             }
             if let Source::File { path } = &p.source {
-                by_path.insert(path.clone(), (p.id, p.local));
+                by_path.insert(import_path(path), (p.id, p.local));
             }
             if let Some(h) = &p.content_hash {
                 by_hash.insert(h.clone(), Some(p.id));
@@ -890,6 +936,7 @@ impl ImportJob {
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
         let mut todo = Vec::new();
         for f in files {
+            let f = import_path(&f);
             match self.by_path.get(f.as_str()).copied() {
                 Some((id, true)) if !opts.local => {
                     // a file that was only browsed (Local) joins the library when it is imported for real
@@ -1190,6 +1237,16 @@ fn run_transfers(
 /// Copy or move one planned file (and Copy as DNG); its item.
 fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> PreparedItem {
     let Transfer { path, mut info, sidecar, dir, how, dng, .. } = t;
+    let (path, dir) = match resolved_transfer_paths(
+        &path,
+        &dir,
+        matches!(&how, How::Place { .. }),
+        |p| crate::macos_mas::resolve(p),
+        |p| crate::macos_mas::directory_granted(p),
+    ) {
+        Ok(paths) => paths,
+        Err(error) => return PreparedItem::Failed(path, error),
+    };
     let mut placed = None;
     let mut stored = match how {
         How::Place { name } => match crate::import_move::place(Path::new(&path), &dir, &name) {
@@ -1475,6 +1532,34 @@ impl Session {
 #[cfg(test)]
 mod prepared_tests {
     use super::*;
+    #[test]
+    fn moved_import_transfer_uses_resolved_source_and_destination() {
+        let (source, target) = resolved_transfer_paths(
+            "/old/card/a.dng",
+            Path::new("/old/library/Originals"),
+            true,
+            |p| Ok(PathBuf::from(p.to_string_lossy().replacen("/old/", "/current/", 1))),
+            |p| p.starts_with("/current"),
+        )
+        .unwrap();
+        assert_eq!(source, "/current/card/a.dng");
+        assert_eq!(target, Path::new("/current/library/Originals"));
+    }
+    #[test]
+    fn transfer_denial_propagates_and_move_requires_source_folder_scope() {
+        assert!(
+            resolved_transfer_paths("/old/a.dng", Path::new("/chosen"), false, |_| Err("bookmark denied".into()), |_| true)
+                .unwrap_err()
+                .contains("bookmark denied")
+        );
+        let resolve = |p: &Path| Ok(p.to_path_buf());
+        let permitted = |p: &Path| p == Path::new("/chosen");
+        assert!(resolved_transfer_paths("/old/a.dng", Path::new("/chosen"), false, resolve, permitted).is_ok());
+        assert!(resolved_transfer_paths("/old/a.dng", Path::new("/chosen"), true, resolve, permitted).unwrap_err().contains("Select source folder"));
+        assert!(
+            resolved_transfer_paths("/old/a.dng", Path::new("/chosen"), false, resolve, |_| false).unwrap_err().contains("Select destination folder")
+        );
+    }
 
     #[test]
     fn revalidate_add_only_converts_matching_ready_item() {

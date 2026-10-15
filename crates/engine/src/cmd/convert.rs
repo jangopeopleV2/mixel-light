@@ -18,6 +18,20 @@ fn dng_names(path: &str) -> impl Iterator<Item = std::path::PathBuf> {
     (1u64..).map(move |n| if n == 1 { dir.join(format!("{stem}.dng")) } else { dir.join(format!("{stem}-{n}.dng")) })
 }
 
+/// Resolve a source before deriving a sibling name; a file bookmark never grants its parent.
+fn sibling_source_path(
+    path: &str,
+    resolve: impl Fn(&Path) -> std::result::Result<std::path::PathBuf, String>,
+    directory_granted: impl Fn(&Path) -> bool,
+) -> std::result::Result<std::path::PathBuf, String> {
+    let actual = resolve(Path::new(path))?;
+    let parent = actual.parent().ok_or("The source has no containing folder")?;
+    if !directory_granted(parent) {
+        return Err(format!("Choose source folder {} with Import Folder before writing a DNG or edit copy beside its original", parent.display()));
+    }
+    Ok(actual)
+}
+
 /// Write the DNG for raw file `path` (develop settings in `packet`) next to it under a free name;
 /// returns the new path. An empty `packet` writes no XMP.
 ///
@@ -31,6 +45,8 @@ pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::res
 
 /// [`write_dng_for`] without the session (imports convert on a worker thread).
 pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path: &str, packet: String) -> std::result::Result<String, String> {
+    let actual = sibling_source_path(path, |path| crate::macos_mas::resolve(path), |folder| crate::macos_mas::directory_granted(folder))?;
+    let path = actual.to_str().ok_or("The resolved raw source path is not valid Unicode")?;
     let bytes = match file_bytes {
         Some(r) => r(path)?,
         None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
@@ -175,12 +191,19 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
     const C: &str = "photo.editExternal";
     let ph = s.catalog.photo(id).cloned().ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
     let dir = match &ph.source {
-        Source::File { path } => Path::new(path).parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
+        Source::File { path } => {
+            let actual = sibling_source_path(path, |path| crate::macos_mas::resolve(path), |folder| crate::macos_mas::directory_granted(folder))
+                .map_err(|error| bad(C, error))?;
+            actual.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default()
+        }
         Source::Demo { .. } => match super::str_param(p, "dir") {
             Some(d) => d.to_string(),
             None => return Err(bad(C, "a generated demo photo has no folder: give `dir`")),
         },
     };
+    if !crate::macos_mas::directory_granted(Path::new(&dir)) {
+        return Err(bad(C, format!("Choose output folder {dir} with the native folder picker before writing edit copies")));
+    }
     let mut written = Vec::new();
     let mut write = |path: &str, bytes: &[u8]| -> std::result::Result<(), String> {
         // durable: the TIFF becomes a library photo the external editor then changes
@@ -396,6 +419,26 @@ pub fn edit_specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sibling_output_uses_moved_source_before_deriving_folder_and_name() {
+        let current =
+            sibling_source_path("/old/a.raw", |_| Ok("/selected/moved/b.raw".into()), |folder| folder == Path::new("/selected/moved")).unwrap();
+        assert_eq!(current, Path::new("/selected/moved/b.raw"));
+        let first = dng_names(current.to_str().unwrap()).next().unwrap();
+        assert_eq!(first, Path::new("/selected/moved/b.dng"));
+    }
+
+    #[test]
+    fn sibling_output_refuses_file_only_and_denied_bookmarks_before_io() {
+        let file_only = sibling_source_path("/old/a.raw", |_| Ok("/current/a.raw".into()), |_| false).unwrap_err();
+        assert!(file_only.contains("Import Folder") && file_only.contains("/current"));
+        let denied =
+            sibling_source_path("/old/a.raw", |_| Err("bookmark denied".into()), |_| panic!("denied source must not reach folder authority"))
+                .unwrap_err();
+        assert_eq!(denied, "bookmark denied");
+    }
+
     use lightcraft_catalog::{Photo, PhotoId, Source};
 
     /// Reload fills camera fields a photo lacks (a CR3 imported before CR3 metadata was read) and keeps

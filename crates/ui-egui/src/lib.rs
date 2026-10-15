@@ -303,6 +303,10 @@ pub struct LightcraftApp {
     pub copied: Option<String>,
     /// Native file dialogs up for commands (`pick`): each command runs again when its closes.
     pub(crate) pending_picks: Vec<pick::Pending>,
+    /// UI-only picker continuations; no callback or channel is persisted.
+    pub(crate) pending_pick_callbacks: Vec<pick::PendingCallback>,
+    /// The MAS host forbids synchronous native panels inside the event handler.
+    pub(crate) async_dialogs_required: bool,
     /// Modifiers announced for synthetic input (held from a button down to its release).
     synthetic_mods: egui::Modifiers,
     /// Clear `synthetic_mods` on the next frame.
@@ -423,6 +427,8 @@ impl LightcraftApp {
             synthetic: vec![],
             copied: None,
             pending_picks: vec![],
+            pending_pick_callbacks: vec![],
+            async_dialogs_required: false,
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
             styled: false,
@@ -485,6 +491,12 @@ impl LightcraftApp {
         // keep CPU copies of photo textures so `ui.screenshot {"headless": true}` can draw them
         self.renderer.keep_pixels = true;
         self
+    }
+
+    /// Require a nonblocking native sheet for every picker in this host.
+    /// Other hosts retain their existing synchronous fallback behavior.
+    pub fn require_async_file_dialogs(&mut self) {
+        self.async_dialogs_required = true;
     }
 
     /// Run a UI or engine command by id. The single entry point for every frontend path.

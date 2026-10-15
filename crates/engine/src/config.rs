@@ -22,6 +22,9 @@ enum Platform {
 /// The override is the complete directory; no application-name suffix is appended. An explicitly
 /// empty value disables the settings directory instead of falling back to a personal profile.
 pub fn config_dir() -> Option<PathBuf> {
+    if crate::macos_mas::enabled() {
+        return crate::macos_mas::container_dir("MIXEL Light");
+    }
     let platform = if cfg!(target_os = "macos") {
         Platform::Mac
     } else if cfg!(windows) {
@@ -47,11 +50,17 @@ fn config_dir_with(platform: Platform, env: impl Fn(&str) -> Option<OsString>) -
 
 /// Where face models are kept: `$LIGHTCRAFT_FACE_MODELS` if set, else `<config>/models`.
 pub fn default_face_models_dir() -> Option<PathBuf> {
+    if crate::macos_mas::enabled() {
+        return config_dir().map(|d| d.join("models"));
+    }
     std::env::var_os("LIGHTCRAFT_FACE_MODELS").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("models")))
 }
 
 /// Where opt-in denoise models are kept: `$LIGHTCRAFT_DENOISE_MODELS` if set, else `<config>/denoise-models`.
 pub fn default_denoise_models_dir() -> Option<PathBuf> {
+    if crate::macos_mas::enabled() {
+        return config_dir().map(|d| d.join("denoise-models"));
+    }
     std::env::var_os("LIGHTCRAFT_DENOISE_MODELS")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
@@ -60,6 +69,9 @@ pub fn default_denoise_models_dir() -> Option<PathBuf> {
 
 /// Where the SAM 3 model is kept: `$LIGHTCRAFT_SAM3_DIR` if set, else `<config>/models/sam3`.
 pub fn default_sam3_dir() -> Option<PathBuf> {
+    if crate::macos_mas::enabled() {
+        return config_dir().map(|d| d.join("models").join("sam3"));
+    }
     sam3_dir(std::env::var_os("LIGHTCRAFT_SAM3_DIR"), config_dir())
 }
 

@@ -76,6 +76,32 @@ pub struct Pending {
     rx: Receiver<Vec<String>>,
 }
 
+/// A panel answer that updates transient UI state rather than replaying a command.
+pub(crate) struct PendingCallback {
+    rx: Receiver<Vec<String>>,
+    continuation: Box<dyn FnOnce(&mut LightcraftApp, Vec<String>)>,
+}
+
+/// Start a required nonblocking panel and apply a nonempty answer on the UI thread.
+/// `false` means this host keeps the caller's existing synchronous behavior.
+/// In a strict host this always returns `true`, including an actionable start
+/// failure; a failed sheet must never fall back to a nested AppKit modal loop.
+pub fn defer(app: &mut LightcraftApp, request: PickRequest, continuation: impl FnOnce(&mut LightcraftApp, Vec<String>) + 'static) -> bool {
+    if !app.async_dialogs_required {
+        return false;
+    }
+    if !app.pending_picks.is_empty() || !app.pending_pick_callbacks.is_empty() {
+        return true;
+    }
+    let result =
+        app.services.picker.as_mut().ok_or_else(|| "No file chooser is available in this window".to_owned()).and_then(|start| start(request));
+    match result {
+        Ok(rx) => app.pending_pick_callbacks.push(PendingCallback { rx, continuation: Box::new(continuation) }),
+        Err(error) => app.notices.push(format!("Could not open the file chooser: {error}. Try again from the app window.")),
+    }
+    true
+}
+
 /// How a command's request for a path was answered.
 pub enum Picked {
     /// A synchronous dialog answered (an empty list: cancelled).
@@ -101,6 +127,9 @@ pub fn ask(
     if app.pending_picks.iter().any(|p| p.command == command) {
         return Picked::Later;
     }
+    if app.async_dialogs_required && (!app.pending_picks.is_empty() || !app.pending_pick_callbacks.is_empty()) {
+        return Picked::Later;
+    }
     if let Some(start) = app.services.picker.as_mut() {
         let kind = request.kind;
         match start(request) {
@@ -108,8 +137,16 @@ pub fn ask(
                 app.pending_picks.push(Pending { command: command.to_string(), params: params.clone(), key, kind, rx });
                 return Picked::Later;
             }
+            Err(error) if app.async_dialogs_required => {
+                app.notices.push(format!("Could not open the file chooser: {error}. Try again from the app window."));
+                return Picked::Unavailable;
+            }
             Err(e) => log::warn!("{command}: no background file dialog ({e}); asking on the UI thread"),
         }
+    }
+    if app.async_dialogs_required {
+        app.notices.push("No file chooser is available in this window. Try again from the app window.".into());
+        return Picked::Unavailable;
     }
     match now(&mut app.services) {
         Some(paths) => Picked::Now(paths),
@@ -132,7 +169,7 @@ pub fn with_answer(params: &Value, key: &str, kind: PickKind, paths: &[String]) 
 /// Each frame: run the commands whose dialogs have closed with something chosen; forget the
 /// cancelled ones and those whose dialog went away without an answer.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
-    if app.pending_picks.is_empty() {
+    if app.pending_picks.is_empty() && app.pending_pick_callbacks.is_empty() {
         return;
     }
     let mut answered = Vec::new();
@@ -155,6 +192,25 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         if let Err(e) = app.run(&p.command, params) {
             app.toast_error(ctx, e);
         }
+    }
+    let mut callbacks = Vec::new();
+    let mut waiting_callbacks = Vec::new();
+    for pending in std::mem::take(&mut app.pending_pick_callbacks) {
+        match pending.rx.try_recv() {
+            Ok(paths) if paths.is_empty() => {}
+            Ok(paths) => callbacks.push((pending.continuation, paths)),
+            Err(TryRecvError::Empty) => waiting_callbacks.push(pending),
+            Err(TryRecvError::Disconnected) => {
+                app.notices.push("The file chooser ended without an answer. Try again from the app window.".into());
+            }
+        }
+    }
+    if !waiting_callbacks.is_empty() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    }
+    app.pending_pick_callbacks = waiting_callbacks;
+    for (continuation, paths) in callbacks {
+        continuation(app, paths);
     }
 }
 
@@ -285,5 +341,106 @@ mod tests {
         assert_eq!(bare.run("file.addPhotos", json!({})).unwrap(), Value::Null);
         assert!(bare.run("file.importPresets", json!({})).is_err(), "no dialog on this platform");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_hosts_keep_legacy_callback_behavior() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+        assert!(!defer(&mut app, PickRequest::folder("Choose folder"), |_, _| panic!("a default host must not defer")));
+        assert!(app.pending_pick_callbacks.is_empty());
+    }
+
+    #[test]
+    fn required_callback_waits_for_answer_and_runs_once_on_poll() {
+        let (mut h, asked) = app_with_picker();
+        h.app.require_async_file_dialogs();
+        assert!(defer(&mut h.app, PickRequest::file("Choose profile", "ICC", &["icc"]), |app, paths| {
+            app.ui.settings.display_profile = paths.first().cloned().unwrap_or_default();
+        }));
+        assert!(h.app.ui.settings.display_profile.is_empty());
+        assert_eq!(h.app.pending_pick_callbacks.len(), 1);
+        poll(&mut h.app, &egui::Context::default());
+        assert!(h.app.ui.settings.display_profile.is_empty());
+        asked.lock().unwrap()[0].1.send(vec!["/chosen/profile.icc".into()]).unwrap();
+        poll(&mut h.app, &egui::Context::default());
+        assert_eq!(h.app.ui.settings.display_profile, "/chosen/profile.icc");
+        assert!(h.app.pending_pick_callbacks.is_empty());
+        h.app.ui.settings.display_profile = "after answer".into();
+        poll(&mut h.app, &egui::Context::default());
+        assert_eq!(h.app.ui.settings.display_profile, "after answer");
+    }
+
+    #[test]
+    fn cancelled_or_disconnected_callback_does_not_apply_state() {
+        for disconnected in [false, true] {
+            let (mut h, asked) = app_with_picker();
+            h.app.require_async_file_dialogs();
+            assert!(defer(&mut h.app, PickRequest::folder("Choose folder"), |app, _| app.ui.settings.display_profile = "must not run".into()));
+            if disconnected {
+                asked.lock().unwrap().clear();
+            } else {
+                asked.lock().unwrap()[0].1.send(Vec::new()).unwrap();
+            }
+            poll(&mut h.app, &egui::Context::default());
+            assert!(h.app.ui.settings.display_profile.is_empty());
+            assert!(h.app.pending_pick_callbacks.is_empty());
+            if disconnected {
+                assert!(h.app.notices.iter().any(|n| n.contains("ended without an answer")));
+            }
+        }
+    }
+
+    #[test]
+    fn required_callbacks_never_fall_back_when_the_picker_fails_or_is_absent() {
+        for missing in [false, true] {
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+            app.require_async_file_dialogs();
+            if !missing {
+                app.services.picker = Some(Box::new(|_| Err("synthetic start failure".into())));
+            }
+            assert!(defer(&mut app, PickRequest::folder("Choose folder"), |_, _| panic!("a failed picker cannot answer")));
+            assert!(app.pending_pick_callbacks.is_empty());
+            assert!(!app.notices.is_empty());
+            let result = ask(&mut app, "test.noSyncFallback", &Value::Null, "path", PickRequest::folder("Choose folder"), |_| {
+                panic!("strict hosts must never invoke a synchronous fallback")
+            });
+            assert!(matches!(result, Picked::Unavailable));
+        }
+    }
+
+    #[test]
+    fn required_callback_does_not_open_a_second_native_panel() {
+        let (mut h, asked) = app_with_picker();
+        h.app.require_async_file_dialogs();
+        assert!(defer(&mut h.app, PickRequest::folder("First folder"), |_, _| {}));
+        assert!(defer(&mut h.app, PickRequest::folder("Second folder"), |_, _| panic!("the second chooser was not opened")));
+        assert_eq!(asked.lock().unwrap().len(), 1);
+        assert_eq!(h.app.pending_pick_callbacks.len(), 1);
+    }
+
+    #[test]
+    fn required_command_and_callback_share_one_panel_and_can_reopen_after_cancel() {
+        let (mut h, asked) = app_with_picker();
+        h.app.require_async_file_dialogs();
+        assert!(defer(&mut h.app, PickRequest::folder("First folder"), |_, _| {}));
+        assert!(matches!(
+            ask(&mut h.app, "file.addFolder", &Value::Null, "path", PickRequest::folder("Import folder"), |_| panic!(
+                "a strict host cannot use a synchronous fallback"
+            )),
+            Picked::Later
+        ));
+        assert_eq!(asked.lock().unwrap().len(), 1);
+        assert!(h.app.pending_picks.is_empty());
+        asked.lock().unwrap()[0].1.send(Vec::new()).unwrap();
+        poll(&mut h.app, &egui::Context::default());
+        assert!(h.app.pending_pick_callbacks.is_empty());
+        assert!(matches!(
+            ask(&mut h.app, "file.addFolder", &Value::Null, "path", PickRequest::folder("Import folder"), |_| panic!(
+                "a strict host cannot use a synchronous fallback"
+            )),
+            Picked::Later
+        ));
+        assert_eq!(asked.lock().unwrap().len(), 2);
+        assert_eq!(h.app.pending_picks.len(), 1);
     }
 }

@@ -828,11 +828,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         if graphic {
                             field(ui, "Graphic", |ui| {
                                 trailing_button_row(ui, |ui| {
-                                    if app.services.pick_files.is_some()
+                                    if (app.services.pick_files.is_some() || app.services.picker.is_some())
                                         && crate::widgets::text_button(ui, "exportWmChoose", crate::i18n::tr("Choose…"), false).clicked()
-                                        && let Some(f) = app.services.pick_files.as_mut().and_then(|pick| pick().into_iter().next())
                                     {
-                                        wm.image = f;
+                                        let request = crate::pick::PickRequest::file(crate::i18n::tr("Choose watermark graphic"), "Images", &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp"]);
+                                        if !crate::pick::defer(app, request, apply_export_watermark)
+                                            && let Some(f) = app.services.pick_files.as_mut().and_then(|pick| pick().into_iter().next()) { wm.image = f; }
                                     }
                                     ui.add(egui::TextEdit::singleline(&mut wm.image).hint_text("logo.png").desired_width(ui.available_width()));
                                 });
@@ -911,12 +912,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     field(ui, "Folder", |ui| {
                         trailing_button_row(ui, |ui| {
-                            if app.services.pick_folder.is_some()
+                            if (app.services.pick_folder.is_some() || app.services.picker.is_some())
                                 && crate::widgets::text_button(ui, "exportChooseFolder", crate::i18n::tr("Choose…"), false).clicked()
-                                && let Some(pick) = app.services.pick_folder.as_mut()
-                                && let Some(d) = pick()
                             {
-                                *dir = d;
+                                let request = crate::pick::PickRequest::folder(crate::i18n::tr("Choose export folder"));
+                                if !crate::pick::defer(app, request, apply_export_folder)
+                                    && let Some(d) = app.services.pick_folder.as_mut().and_then(|pick| pick()) { *dir = d; }
                             }
                             ui.add(egui::TextEdit::singleline(dir).desired_width(ui.available_width()));
                         });
@@ -1515,6 +1516,22 @@ pub(crate) fn album_entries(cat: &lightcraft_catalog::Catalog, editing: Option<u
     })
 }
 
+fn apply_export_watermark(app: &mut LightcraftApp, paths: Vec<String>) {
+    let Some(path) = paths.into_iter().next() else { return };
+    if let Some(Dialog::Export { opts, .. }) = app.ui.dialog.as_mut()
+        && let Some(watermark) = opts.watermark.as_mut()
+    {
+        watermark.image = path;
+    }
+}
+
+fn apply_export_folder(app: &mut LightcraftApp, paths: Vec<String>) {
+    let Some(path) = paths.into_iter().next() else { return };
+    if let Some(Dialog::Export { dir, .. }) = app.ui.dialog.as_mut() {
+        *dir = path;
+    }
+}
+
 pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_json::Value, String> {
     match dlg {
         Dialog::SamModel { then, .. } => {
@@ -1938,5 +1955,39 @@ mod watermark_position_tests {
         for anchor in anchors {
             assert_eq!(WM_POSITIONS.iter().filter(|(position, _)| *position == anchor).count(), 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod deferred_export_selection_tests {
+    use super::*;
+    #[test]
+    fn cancelled_or_closed_export_picker_preserves_existing_choices() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+        let opts = lightcraft_engine::export::ExportOptions {
+            watermark: Some(lightcraft_engine::export::Watermark { image: "/existing/logo.png".into(), ..Default::default() }),
+            ..Default::default()
+        };
+        app.ui.dialog = Some(Dialog::Export {
+            opts,
+            full_size: true,
+            resize: Default::default(),
+            preset_name: String::new(),
+            limit_kb: 0,
+            dir: "/existing/output".into(),
+        });
+        let original = serde_json::to_value(&app.ui.dialog).unwrap();
+        apply_export_folder(&mut app, vec![]);
+        apply_export_watermark(&mut app, vec![]);
+        assert_eq!(serde_json::to_value(&app.ui.dialog).unwrap(), original);
+        apply_export_folder(&mut app, vec!["/selected/output".into()]);
+        apply_export_watermark(&mut app, vec!["/selected/logo.png".into()]);
+        assert!(
+            matches!(app.ui.dialog.as_ref(), Some(Dialog::Export { dir, opts, .. }) if dir == "/selected/output" && opts.watermark.as_ref().is_some_and(|w| w.image == "/selected/logo.png"))
+        );
+        app.ui.dialog = Some(Dialog::About);
+        apply_export_folder(&mut app, vec!["/ignored".into()]);
+        apply_export_watermark(&mut app, vec!["/ignored.png".into()]);
+        assert!(matches!(app.ui.dialog, Some(Dialog::About)));
     }
 }

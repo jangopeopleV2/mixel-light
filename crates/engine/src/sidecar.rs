@@ -65,15 +65,63 @@ pub fn sidecar_path(original: &str, naming: SidecarNaming) -> PathBuf {
 /// An existing sidecar for `original`: the preferred naming first, then the other one (also
 /// accepting an upper-case `.XMP`).
 pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
+    match sidecar_locations_with(original, naming, true, &|p| crate::macos_mas::resolve(p)) {
+        Ok(locations) => {
+            let found = locations.candidates.into_iter().find(|p| p.is_file());
+            if found.is_none() {
+                unavailable_sidecar_scope(&locations.original);
+            }
+            found
+        }
+        Err(error) => {
+            crate::macos_mas::notice(format!("Cannot read the sidecar for {original}: {error}"));
+            log::warn!("Cannot read the sidecar for {original}: {error}");
+            None
+        }
+    }
+}
+
+/// A file-only grant cannot prove that no adjacent XMP exists. Keep photo import usable,
+/// but tell the user how to include metadata that the sandbox could not inspect.
+fn unavailable_sidecar_scope(original: &Path) {
+    if crate::macos_mas::enabled() && !original.parent().is_some_and(crate::macos_mas::directory_granted) {
+        crate::macos_mas::notice(format!(
+            "Adjacent XMP metadata for {} could not be checked. Choose its containing folder with Import Folder to include sidecars.",
+            original.display()
+        ));
+    }
+}
+
+struct SidecarLocations {
+    original: PathBuf,
+    preferred: PathBuf,
+    candidates: Vec<PathBuf>,
+}
+
+/// Derive paths from the resolved original, then resolve separately granted sidecars too.
+/// Saved-name candidates preserve an independently moved sidecar's foreign XMP properties.
+fn sidecar_locations_with(
+    original: &str,
+    naming: SidecarNaming,
+    include_stem: bool,
+    resolve: &dyn Fn(&Path) -> std::result::Result<PathBuf, String>,
+) -> std::result::Result<SidecarLocations, String> {
+    let current = resolve(Path::new(original))?;
+    let preferred = resolve(&sidecar_path(&current.to_string_lossy(), naming))?;
     let other = if naming == SidecarNaming::Stem { SidecarNaming::Full } else { SidecarNaming::Stem };
-    [naming, other]
-        .into_iter()
-        .flat_map(|n| {
-            let p = sidecar_path(original, n);
-            let upper = p.with_extension("XMP");
-            [p, upper]
-        })
-        .find(|p| p.is_file())
+    let mut candidates = Vec::new();
+    for style in [naming, other].into_iter().filter(|n| include_stem || *n != SidecarNaming::Stem) {
+        for base in [original, current.to_str().ok_or("Original file path is not valid Unicode")?] {
+            let path = sidecar_path(base, style);
+            for candidate in [path.clone(), path.with_extension("XMP")] {
+                let candidate = resolve(&candidate)?;
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+    }
+    Ok(SidecarLocations { original: current, preferred, candidates })
 }
 
 /// What a sidecar (or embedded XMP packet) says about a photo. `None` = not stated.
@@ -385,7 +433,11 @@ pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateC
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    lightcraft_catalog::safe_file::write_atomic(path, data)
+    lightcraft_catalog::safe_file::write_atomic(path, data)?;
+    if let Err(error) = crate::macos_mas::after_write(path) {
+        log::warn!("The sidecar was saved, but future access could not be retained: {error}");
+    }
+    Ok(())
 }
 
 /// Copy `path` to a new `<name>.bak-<stamp>` (`-1`, `-2`… if taken; never overwriting).
@@ -459,15 +511,34 @@ fn file_path(p: &Photo) -> Option<&str> {
 
 /// The XMP packet that describes a photo on disk: its sidecar, else (raw/DNG) the embedded XMP.
 pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<(String, PathBuf)> {
-    if let Some(sc) = find_sidecar(original, naming)
-        && let Ok(s) = std::fs::read_to_string(&sc)
-    {
-        return Some((s, sc));
+    let locations = match sidecar_locations_with(original, naming, true, &|p| crate::macos_mas::resolve(p)) {
+        Ok(locations) => locations,
+        Err(error) => {
+            crate::macos_mas::notice(format!("Cannot read metadata for {original}: {error}"));
+            log::warn!("Cannot read metadata for {original}: {error}");
+            return None;
+        }
+    };
+    if let Some(path) = locations.candidates.into_iter().find(|p| p.is_file()) {
+        match std::fs::read_to_string(&path) {
+            Ok(packet) => return Some((packet, path)),
+            Err(error) if crate::macos_mas::enabled() => {
+                crate::macos_mas::notice(format!(
+                    "Cannot read metadata {}: {error}. Choose its containing folder again with Import Folder.",
+                    path.display()
+                ));
+                log::warn!("Cannot read metadata {}: {error}", path.display());
+                return None;
+            }
+            Err(_) => {}
+        }
+    } else {
+        unavailable_sidecar_scope(&locations.original);
     }
     if kind == MediaKind::Raw {
-        let bytes = std::fs::read(original).ok()?;
+        let bytes = std::fs::read(&locations.original).ok()?;
         let x = lightcraft_meta::embedded(&bytes).xmp?;
-        return Some((x, PathBuf::from(original)));
+        return Some((x, locations.original));
     }
     None
 }
@@ -487,14 +558,26 @@ pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
 
 /// Which photo owns each stem sidecar that several catalogued files map to (see
 /// [`Session::sidecar_naming`]).
-pub(crate) struct StemOwners(HashMap<String, PhotoId>);
+pub(crate) struct StemOwners {
+    owners: HashMap<String, PhotoId>,
+    resolution_error: Option<String>,
+}
 
 impl StemOwners {
     pub(crate) fn of(cat: &lightcraft_catalog::Catalog) -> StemOwners {
         // per stem: (raw first, then file name, then id) of the best candidate; and how many
         let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
+        let mut resolution_error = None;
         for p in cat.photos().filter(|p| p.copy_of.is_none()) {
             let Some(path) = file_path(p) else { continue };
+            let path = match crate::macos_mas::resolve(path) {
+                Ok(path) => path.to_string_lossy().into_owned(),
+                Err(error) => {
+                    resolution_error.get_or_insert(error);
+                    continue;
+                }
+            };
+            let path = path.as_str();
             let rank = (p.kind != MediaKind::Raw, path.to_lowercase(), p.id.0);
             let e = best.entry(stem_key(path)).or_insert_with(|| (rank.clone(), p.id, 0));
             e.2 += 1;
@@ -502,13 +585,20 @@ impl StemOwners {
                 (e.0, e.1) = (rank, p.id);
             }
         }
-        StemOwners(best.into_iter().filter(|(_, v)| v.2 > 1).map(|(k, v)| (k, v.1)).collect())
+        StemOwners { owners: best.into_iter().filter(|(_, v)| v.2 > 1).map(|(k, v)| (k, v.1)).collect(), resolution_error }
     }
 
     /// `naming` for photo `p`, except that a stem sidecar another file owns becomes Full.
     fn naming(&self, p: &Photo, naming: SidecarNaming) -> SidecarNaming {
         match (naming, file_path(p)) {
-            (SidecarNaming::Stem, Some(path)) if self.0.get(&stem_key(path)).is_some_and(|owner| *owner != p.id) => SidecarNaming::Full,
+            (SidecarNaming::Stem, Some(path))
+                if self
+                    .owners
+                    .get(&stem_key(&crate::macos_mas::resolve(path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_owned())))
+                    .is_some_and(|owner| *owner != p.id) =>
+            {
+                SidecarNaming::Full
+            }
             _ => naming,
         }
     }
@@ -544,22 +634,20 @@ impl Session {
     }
 
     pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
+        if let Some(error) = &owners.resolution_error {
+            return Err(EngineError::Other(format!("Cannot verify sidecar ownership: {error}")));
+        }
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         if p.copy_of.is_some() {
             return Err(EngineError::Other(format!("{} is a virtual copy: its settings live only in the library", p.file_name)));
         }
         let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
         let naming = owners.naming(p, self.xmp.naming);
-        let preferred = sidecar_path(orig, naming);
-        let other = if naming == SidecarNaming::Stem { SidecarNaming::Full } else { SidecarNaming::Stem };
-        let candidates: Vec<PathBuf> = [naming, other]
-            .into_iter()
-            .filter(|n| *n != SidecarNaming::Stem || owners.naming(p, SidecarNaming::Stem) == SidecarNaming::Stem)
-            .flat_map(|n| {
-                let path = sidecar_path(orig, n);
-                [path.clone(), path.with_extension("XMP")]
-            })
-            .collect();
+        let locations =
+            sidecar_locations_with(orig, naming, owners.naming(p, SidecarNaming::Stem) == SidecarNaming::Stem, &|p| crate::macos_mas::resolve(p))
+                .map_err(EngineError::Other)?;
+        let preferred = locations.preferred;
+        let candidates = locations.candidates;
         // A separated packet is still the photo's metadata. Repair it before a fresh write
         // occupies its destination; a failure preserves the queue and both existing packets.
         self.repair_sidecars_for_paths(&candidates, &crate::rename::RealFs)
@@ -567,6 +655,12 @@ impl Session {
         // Keep an existing packet's spelling/style so foreign properties survive this save and
         // subsequent Undo/Redo writes. Shared stems owned by another photo were excluded above.
         let path = candidates.into_iter().find(|path| path.is_file()).unwrap_or(preferred);
+        if crate::macos_mas::enabled() && !path.parent().is_some_and(crate::macos_mas::directory_granted) {
+            return Err(EngineError::Other(format!(
+                "Choose the folder containing {} with Import Folder before saving adjacent XMP metadata.",
+                path.display()
+            )));
+        }
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
@@ -642,6 +736,7 @@ impl Session {
             if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none())
                 && let Err(e) = self.save_sidecar_with(id, &owners)
             {
+                crate::macos_mas::notice(format!("XMP metadata was not saved: {e}"));
                 log::warn!("auto-write XMP: {e}");
             }
         }
@@ -650,6 +745,41 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use super::{Path, PathBuf, SidecarNaming, sidecar_locations_with};
+    #[test]
+    fn moved_original_is_resolved_before_deriving_and_resolving_sidecar_paths() {
+        let resolve = |path: &Path| -> std::result::Result<PathBuf, String> {
+            if path == Path::new("/old/IMG.CR3") {
+                Ok("/new/RENAMED.CR3".into())
+            } else if path == Path::new("/new/RENAMED.xmp") || path == Path::new("/old/IMG.xmp") {
+                Ok("/metadata/packet.xmp".into())
+            } else {
+                Ok(path.to_path_buf())
+            }
+        };
+        let paths = sidecar_locations_with("/old/IMG.CR3", SidecarNaming::Stem, true, &resolve).unwrap();
+        assert_eq!(paths.original, Path::new("/new/RENAMED.CR3"));
+        assert_eq!(paths.preferred, Path::new("/metadata/packet.xmp"));
+        assert_eq!(paths.candidates.first().unwrap(), Path::new("/metadata/packet.xmp"));
+        assert!(paths.candidates.contains(&PathBuf::from("/new/RENAMED.CR3.xmp")));
+    }
+
+    #[test]
+    fn denied_original_or_sidecar_resolution_never_returns_a_write_destination() {
+        for denied in ["/old/IMG.CR3", "/new/IMG.xmp"] {
+            let resolve = |path: &Path| -> std::result::Result<PathBuf, String> {
+                if path == Path::new(denied) {
+                    Err("bookmark denied".into())
+                } else if path == Path::new("/old/IMG.CR3") {
+                    Ok("/new/IMG.CR3".into())
+                } else {
+                    Ok(path.to_path_buf())
+                }
+            };
+            assert!(sidecar_locations_with("/old/IMG.CR3", SidecarNaming::Stem, true, &resolve).err().unwrap().contains("bookmark denied"));
+        }
+    }
+
     /// A sidecar written by Lightroom Classic (names flat, paths in `lr:hierarchicalSubject`)
     /// gives the photo its keywords as paths.
     #[test]

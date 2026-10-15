@@ -37,6 +37,8 @@ pub const DEFAULT_NAME: &str = "MIXEL Light Library";
 /// existing file is an error that says so, instead of the OS's "File exists" from creating the
 /// folder.
 pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
+    let resolved = crate::macos_mas::resolve(path).map_err(EngineError::Other)?;
+    let path = resolved.as_path();
     if !path.is_file() {
         return Ok(path.to_path_buf());
     }
@@ -53,6 +55,22 @@ pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
     })
 }
 
+/// A library writes a snapshot, journal, lock, settings and caches. A bookmark to
+/// one catalog file does not grant this containing directory.
+fn require_library_folder_with(dir: &Path, directory_granted: impl Fn(&Path) -> bool) -> Result<()> {
+    if !directory_granted(dir) {
+        return Err(EngineError::Other(format!(
+            "Choose library folder {} with File > Open Library before opening or creating its catalog files; selecting one catalog file does not grant the folder",
+            dir.display()
+        )));
+    }
+    Ok(())
+}
+
+fn require_library_folder(dir: &Path) -> Result<()> {
+    require_library_folder_with(dir, |folder| crate::macos_mas::directory_granted(folder))
+}
+
 /// Whether `dir` already holds a library (its catalog files).
 pub fn is_library(dir: &Path) -> bool {
     dir.join(lightcraft_catalog::journal::SNAPSHOT).is_file() || dir.join(lightcraft_catalog::journal::LOG).is_file()
@@ -61,6 +79,9 @@ pub fn is_library(dir: &Path) -> bool {
 /// The default library location: `$LIGHTCRAFT_LIBRARY` if set, else `~/Pictures/MIXEL Light Library`
 /// (`%USERPROFILE%\Pictures\MIXEL Light Library` on Windows).
 pub fn default_dir() -> Option<PathBuf> {
+    if crate::macos_mas::enabled() {
+        return crate::macos_mas::container_dir("MIXEL Light").map(|d| d.join(DEFAULT_NAME));
+    }
     if let Some(p) = std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
@@ -278,11 +299,12 @@ impl Session {
     /// Nothing is created; a library folder that exists gets its lock taken and released again.
     /// Opening can still fail afterwards (a damaged catalog, a disk going away).
     pub fn check_library(&self, dir: impl AsRef<Path>) -> Result<PathBuf> {
-        let dir = dir.as_ref().to_path_buf();
+        let dir = crate::macos_mas::resolve(dir.as_ref()).map_err(EngineError::Other)?;
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
         let dir = resolve_dir(&dir)?;
+        require_library_folder(&dir)?;
         if !dir.exists() {
             return Ok(dir);
         }
@@ -310,11 +332,12 @@ impl Session {
     /// created ([`crate::lightroom_folder`]); a MIXEL Light library always opens, whatever else
     /// its folder holds.
     pub fn open_library(&mut self, dir: impl AsRef<Path>, seed_demo: bool) -> Result<&LoadReport> {
-        let dir = dir.as_ref().to_path_buf();
+        let dir = crate::macos_mas::resolve(dir.as_ref()).map_err(EngineError::Other)?;
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
         let dir = resolve_dir(&dir)?;
+        require_library_folder(&dir)?;
         let open = || FsStore::open(&dir).map_err(|e| EngineError::Other(format!("can't open library {}: {e}", dir.display())));
         let stores = LibraryStores { catalog: Box::new(open()?), files: Box::new(open()?), on_disk: true, dir: dir.clone() };
         // the library open in this session (same directory): hand its lock over
@@ -351,6 +374,9 @@ impl Session {
     /// Open `stores`; the new library takes `lock` once nothing can fail any more.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
+        if on_disk {
+            require_library_folder(&dir)?;
+        }
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // the current library may be these same files: let its background snapshot land first
         if let Some(old) = self.library.as_mut()
@@ -723,6 +749,16 @@ fn unlocked_warning(lock: Option<&LibraryLock>) -> Option<String> {
 #[cfg(test)]
 mod resolve_tests {
     use super::*;
+
+    #[test]
+    fn on_disk_library_needs_the_folder_and_a_catalog_file_grant_cannot_supply_it() {
+        let library = Path::new("/selected/library");
+        let err = require_library_folder_with(library, |path| path == Path::new("/selected/library/catalog.snap")).unwrap_err();
+        assert!(err.to_string().contains("File > Open Library"));
+        assert!(require_library_folder_with(library, |path| path == library).is_ok());
+        assert!(require_library_folder_with(Path::new("/selected/library/new-child"), |path| path.starts_with(library)).is_ok());
+        assert!(require_library_folder_with(Path::new("relative-library"), |_| true).is_ok(), "ordinary hosts keep relative library paths");
+    }
 
     /// `--library <dir>/catalog.snap` failed with the OS's "File exists" (creating a folder over
     /// the file); it opens the library that file belongs to.

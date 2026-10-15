@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate every app icon file from assets/app-icon/lightcraft.svg.
+# Regenerate app icons from lightcraft.svg: supplied PNG brand plus editable vector overlays.
 #
 # Needs: resvg (brew install resvg / cargo install resvg). On macOS, iconutil also writes the
 # .icns. The outputs are committed, so building and packaging never need these tools.
@@ -15,7 +15,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 command -v resvg >/dev/null || { echo "error: resvg not found (brew install resvg)" >&2; exit 1; }
 
-# The SVG is the full-bleed 512 tile (rx=112). Windows and Linux use it as is, so the lynx reads at
+# The hybrid SVG is a full-bleed 512 tile (rx=104). Windows and Linux use it as is, so it reads at
 # 16-48 px. macOS icons follow Apple's grid: an 824/1024 body with a transparent margin, made by
 # widening the viewBox (512 / 0.805 = 636, so 62 units each side).
 MAC="$TMP/macos.svg"

@@ -1010,7 +1010,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             d.copy = false;
             d.move_files = false;
         }
-        let can_copy = app.session.library.as_ref().is_some_and(|l| l.on_disk) || app.services.pick_folder.is_some();
+        let can_copy =
+            app.session.library.as_ref().is_some_and(|l| l.on_disk) || (app.services.pick_folder.is_some() || app.services.picker.is_some());
         let r =
             ui.add_enabled_ui(can_copy, |ui| crate::widgets::text_button(ui, "importCopy", crate::i18n::tr("Copy"), d.copy && !d.move_files)).inner;
         if r.on_hover_text(crate::i18n::tr("Copy the files (into the library's Originals/, or a folder you choose)")).clicked() {
@@ -1045,11 +1046,16 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             ui.spacing_mut().item_spacing.x = 4.0;
             let shown = if d.destination.trim().is_empty() { crate::i18n::tr("Library Originals").to_string() } else { d.destination.clone() };
             ui.label(egui::RichText::new(shown).color(Tokens::get(ui.ctx()).text_label));
-            if app.services.pick_folder.is_some()
+            if (app.services.pick_folder.is_some() || app.services.picker.is_some())
                 && crate::widgets::text_button(ui, "importDest", crate::i18n::tr("Choose…"), false).clicked()
-                && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
             {
-                d.destination = f;
+                let sources = d.sources.clone();
+                let request = crate::pick::PickRequest::folder(crate::i18n::tr("Choose import destination"));
+                if !crate::pick::defer(app, request, move |app, paths| apply_import_destination(app, &sources, paths))
+                    && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
+                {
+                    d.destination = f;
+                }
             }
             if !d.destination.is_empty() && crate::widgets::text_button(ui, "importDestReset", crate::i18n::tr("Library"), false).clicked() {
                 d.destination.clear();
@@ -1586,5 +1592,33 @@ mod tests {
         d.last_clicked = Some(99);
         d.click(2, true);
         assert_eq!(d.checked, [true, true, false, false, true, true]);
+    }
+}
+
+fn apply_import_destination(app: &mut LightcraftApp, sources: &[String], paths: Vec<String>) {
+    let Some(path) = paths.into_iter().next() else { return };
+    if let Some(crate::state::Dialog::Import { opts }) = app.ui.dialog.as_mut()
+        && opts.sources.as_slice() == sources
+    {
+        opts.destination = path;
+    }
+}
+
+#[cfg(test)]
+mod deferred_destination_tests {
+    use super::*;
+    #[test]
+    fn cancelled_or_stale_import_folder_choice_keeps_review_unchanged() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+        let opts = ImportDialog { sources: vec!["/chosen/source".into()], destination: "/existing/destination".into(), ..Default::default() };
+        app.ui.dialog = Some(crate::state::Dialog::Import { opts: Box::new(opts.clone()) });
+        apply_import_destination(&mut app, &opts.sources, vec![]);
+        apply_import_destination(&mut app, &["/previous/review".into()], vec!["/new/destination".into()]);
+        assert!(matches!(app.ui.dialog.as_ref(), Some(crate::state::Dialog::Import { opts: shown }) if **shown == opts));
+        apply_import_destination(&mut app, &opts.sources, vec!["/new/destination".into()]);
+        assert!(matches!(app.ui.dialog.as_ref(), Some(crate::state::Dialog::Import { opts: shown }) if shown.destination == "/new/destination"));
+        app.ui.dialog = Some(crate::state::Dialog::About);
+        apply_import_destination(&mut app, &opts.sources, vec!["/ignored".into()]);
+        assert!(matches!(app.ui.dialog, Some(crate::state::Dialog::About)));
     }
 }

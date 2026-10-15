@@ -24,17 +24,18 @@
 
 mod alloc_release;
 mod appearance;
+#[cfg(not(all(target_os = "macos", feature = "mac-app-store")))]
 mod control_server;
 mod dialog_filter;
 mod editors;
 mod logging;
+mod mas_dialog;
 #[cfg(target_os = "macos")]
 mod native_menu;
 #[cfg(target_os = "macos")]
 mod screen_profile;
 mod window_gpu;
 
-use dialog_filter::FileDialogExt as _;
 use lightcraft_engine::Session;
 use lightcraft_ui_egui::panels::library_problem::LibraryProblem;
 use lightcraft_ui_egui::{LightcraftApp, Services, UiState};
@@ -56,6 +57,7 @@ struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.0.notices.extend(lightcraft_engine::macos_mas::poll());
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
             && m.update(&mut self.0, ctx)
@@ -71,6 +73,18 @@ impl eframe::App for App {
         self.1.tick(&mut self.0, ctx);
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if lightcraft_engine::macos_mas::enabled() {
+            raw.dropped_files.retain_mut(|file| {
+                let path = file.path();
+                match lightcraft_engine::macos_mas::selected(path, false) {
+                    Ok(_) => true,
+                    Err(error) => {
+                        self.0.notices.push(error);
+                        false
+                    }
+                }
+            });
+        }
         self.0.raw_input_hook(raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -394,49 +408,61 @@ fn explorer_select_command(path: &str) -> std::process::Command {
 static DIALOG_PARENT: std::sync::OnceLock<rfd::FileDialog> = std::sync::OnceLock::new();
 
 /// A file dialog owned by the app's window, or a plain one before the window exists.
-fn file_dialog() -> rfd::FileDialog {
-    DIALOG_PARENT.get().cloned().unwrap_or_default()
+fn file_dialog() -> mas_dialog::Dialog {
+    mas_dialog::Dialog(DIALOG_PARENT.get().cloned().unwrap_or_default())
 }
 
 /// The platform services; `cc` is the window the file dialogs belong to (its `egui_ctx` repaints
 /// when a dialog closes), and `log_file` is for Help ▸ Open Log Folder.
 fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>) -> Services {
     let ctx = cc.egui_ctx.clone();
+    #[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+    let sheet_parent = {
+        use raw_window_handle::{HasDisplayHandle as _, HasWindowHandle as _};
+        (cc.window_handle().is_ok() && cc.display_handle().is_ok()).then(|| rfd::AsyncFileDialog::new().set_parent(cc))
+    };
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let _ = DIALOG_PARENT.set(rfd::FileDialog::new().set_parent(cc));
     Services {
         // Commands' file dialogs run on their own thread (#191): a dialog on the UI thread
         // stopped the window answering the compositor, which then reported the app as hung.
         picker: Some(Box::new(move |req: lightcraft_ui_egui::pick::PickRequest| {
-            use lightcraft_ui_egui::pick::PickKind;
-            let (tx, rx) = std::sync::mpsc::channel();
-            let repaint = ctx.clone();
-            std::thread::Builder::new()
-                .name("file-dialog".into())
-                .spawn(move || {
-                    let mut d = file_dialog();
-                    if let Some(t) = &req.title {
-                        d = d.set_title(t);
-                    }
-                    if let Some((name, exts)) = &req.filter {
-                        d = d.add_filter_nocase(name.clone(), exts);
-                    }
-                    if let Some(n) = &req.file_name {
-                        d = d.set_file_name(n);
-                    }
-                    let s = |p: std::path::PathBuf| p.to_string_lossy().to_string();
-                    let paths: Vec<String> = match req.kind {
-                        PickKind::Files => d.pick_files().unwrap_or_default().into_iter().map(s).collect(),
-                        PickKind::File => d.pick_file().map(s).into_iter().collect(),
-                        PickKind::Folder => d.pick_folder().map(s).into_iter().collect(),
-                        PickKind::Save => d.save_file().map(s).into_iter().collect(),
-                    };
-                    // the app may have quit meanwhile: nobody to tell
-                    let _ = tx.send(paths);
-                    repaint.request_repaint();
-                })
-                .map_err(|e| format!("could not start the file dialog: {e}"))?;
-            Ok(rx)
+            #[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+            {
+                mas_dialog::start_sheet(req, sheet_parent.as_ref(), ctx.clone())
+            }
+            #[cfg(not(all(target_os = "macos", feature = "mac-app-store")))]
+            {
+                use lightcraft_ui_egui::pick::PickKind;
+                let (tx, rx) = std::sync::mpsc::channel();
+                let repaint = ctx.clone();
+                std::thread::Builder::new()
+                    .name("file-dialog".into())
+                    .spawn(move || {
+                        let mut d = file_dialog();
+                        if let Some(t) = &req.title {
+                            d = d.set_title(t);
+                        }
+                        if let Some((name, exts)) = &req.filter {
+                            d = d.add_filter_nocase(name.clone(), exts);
+                        }
+                        if let Some(n) = &req.file_name {
+                            d = d.set_file_name(n);
+                        }
+                        let s = |p: std::path::PathBuf| p.to_string_lossy().to_string();
+                        let paths: Vec<String> = match req.kind {
+                            PickKind::Files => d.pick_files().unwrap_or_default().into_iter().map(s).collect(),
+                            PickKind::File => d.pick_file().map(s).into_iter().collect(),
+                            PickKind::Folder => d.pick_folder().map(s).into_iter().collect(),
+                            PickKind::Save => d.save_file().map(s).into_iter().collect(),
+                        };
+                        // the app may have quit meanwhile: nobody to tell
+                        let _ = tx.send(paths);
+                        repaint.request_repaint();
+                    })
+                    .map_err(|e| format!("could not start the file dialog: {e}"))?;
+                Ok(rx)
+            }
         })),
         log_file: log_file.map(|p| p.display().to_string()),
         pick_lightroom_catalog: Some(Box::new(|| {
@@ -696,6 +722,7 @@ fn log_dir() -> Option<std::path::PathBuf> {
 
 /// The control port `value` names; a value that isn't a port is logged and ignored (`what` is
 /// the option or variable it came from). Logged before the log file opens, so it is kept for it.
+#[cfg(any(test, not(all(target_os = "macos", feature = "mac-app-store"))))]
 fn control_port_from(what: &str, value: Option<String>) -> Option<u16> {
     let value = value?;
     let port = value.trim().parse().ok();
@@ -707,18 +734,28 @@ fn control_port_from(what: &str, value: Option<String>) -> Option<u16> {
 
 /// An isolated profile keeps the emergency crash log with its other app data. With no
 /// override (or an empty override), retain the historical system-temp location.
+#[cfg(any(test, not(all(target_os = "macos", feature = "mac-app-store"))))]
 fn panic_log_path_with(env: impl Fn(&str) -> Option<std::ffi::OsString>, temp: std::path::PathBuf) -> std::path::PathBuf {
     env("LIGHTCRAFT_CONFIG_DIR").filter(|value| !value.is_empty()).map(std::path::PathBuf::from).unwrap_or(temp).join("lightcraft-panics.log")
 }
 
 fn main() -> eframe::Result {
+    #[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+    let mas_container = lightcraft_engine::macos_mas::container_dir("MIXEL Light").ok_or_else(|| {
+        eframe::Error::AppCreation("Launch the signed MIXEL Light App Store application bundle to use its private container".into())
+    })?;
+    let sandbox_notices = lightcraft_engine::macos_mas::initialize("MIXEL Light");
     // First, so every start-up record is kept for the log file (`logging`).
     let logger = logging::install();
+    #[cfg(not(all(target_os = "macos", feature = "mac-app-store")))]
     lightcraft_engine::guard::install_hook(panic_log_path_with(|name| std::env::var_os(name), std::env::temp_dir()));
+    #[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+    lightcraft_engine::guard::install_hook(mas_container.join("lightcraft-panics.log"));
     if let Some(logger) = logger {
         logging::record_panics(logger);
     }
     alloc_release::install();
+    #[cfg(not(all(target_os = "macos", feature = "mac-app-store")))]
     let mut control_port = control_port_from("LIGHTCRAFT_CONTROL_PORT", std::env::var("LIGHTCRAFT_CONTROL_PORT").ok().filter(|v| !v.is_empty()));
     let mut files = Vec::new();
     let mut seed_demo = true;
@@ -727,7 +764,14 @@ fn main() -> eframe::Result {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--control" => control_port = control_port_from("--control", Some(args.next().unwrap_or_default())),
+            "--control" => {
+                #[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+                return Err(eframe::Error::AppCreation("The App Store build does not expose a control server".into()));
+                #[cfg(not(all(target_os = "macos", feature = "mac-app-store")))]
+                {
+                    control_port = control_port_from("--control", Some(args.next().unwrap_or_default()));
+                }
+            }
             "--library" => library_dir = args.next().map(std::path::PathBuf::from),
             "--no-demo" => seed_demo = false,
             "--memory" | "--demo" => in_memory = true,
@@ -765,6 +809,19 @@ fn main() -> eframe::Result {
     }
     // what the arguments name, resolved now: an empty or relative argument never becomes a drive
     // root, and a whole drive or home folder is not walked (issue #374)
+    let mut sandbox_notices = sandbox_notices;
+    if lightcraft_engine::macos_mas::enabled() {
+        files = files
+            .into_iter()
+            .filter_map(|path| match lightcraft_engine::macos_mas::selected(&path, false) {
+                Ok(path) => Some(path.to_string_lossy().into_owned()),
+                Err(error) => {
+                    sandbox_notices.push(error);
+                    None
+                }
+            })
+            .collect();
+    }
     let (files, launch_notices) = launch_imports(&files);
     let (prefs, prefs_warning, keep_prefs_file) = load_prefs(in_memory);
     // the saved language from the start, so a failed start is reported in it too
@@ -779,7 +836,13 @@ fn main() -> eframe::Result {
             .filter(|p| !p.is_empty() && std::env::var_os("LIGHTCRAFT_LIBRARY").is_none())
             .map(Into::into)
     });
-    let library_dir = library_dir.or_else(lightcraft_engine::library::default_dir);
+    let library_dir = library_dir.or_else(lightcraft_engine::library::default_dir).map(|path| match lightcraft_engine::macos_mas::resolve(&path) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            sandbox_notices.push(error);
+            path
+        }
+    });
     // GPU compute: off if the preference says so, or if the last launch died creating the device
     // (issue #136) — before anything can create it
     let gpu_crash = gpu_crash_check(in_memory);
@@ -834,6 +897,8 @@ fn main() -> eframe::Result {
                 // and the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
                 session = session.with_default_sam3_model();
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                #[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+                app.require_async_file_dialogs();
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }
@@ -841,6 +906,7 @@ fn main() -> eframe::Result {
                 app.integrated_titlebar = cfg!(target_os = "macos");
                 app.notices.extend(prefs_warning);
                 app.notices.extend(launch_notices);
+                app.notices.extend(sandbox_notices);
                 app.notices.extend(window_notice);
                 // what's on disk now: only changes are written
                 let writer = PrefsWriter {
@@ -855,6 +921,7 @@ fn main() -> eframe::Result {
                     app.ui.settings.gpu = false;
                     app.notices.push(notice);
                 }
+                #[cfg(not(all(target_os = "macos", feature = "mac-app-store")))]
                 if let Some(port) = control_port {
                     let rx = control_server::start(port, cc.egui_ctx.clone());
                     app = app.with_control(rx);

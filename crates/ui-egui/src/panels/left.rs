@@ -800,18 +800,19 @@ fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &LocalNow) {
         let reveal = local.owner == Some(i);
         folder_tree(app, ui, name, path, 0.0, current, reveal, transient);
     }
-    if app.services.pick_folder.is_some() && row(app, ui, "local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…"), None, false, 0.0).clicked()
+    if (app.services.pick_folder.is_some() || app.services.picker.is_some())
+        && row(app, ui, "local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…"), None, false, 0.0).clicked()
     {
-        let picked = app.services.pick_folder.as_mut().and_then(|f| f());
-        if let Some(path) = picked {
-            match app.run("library.browse", json!({"path": path})) {
-                // the picked folder stays in Local (and comes back if it was hidden)
-                Ok(r) => {
-                    let dir = r["path"].as_str().unwrap_or(&path).to_string();
-                    let _ = app.run("local.addRoot", json!({"path": dir}));
-                }
-                Err(e) => app.toast(ui.ctx(), e),
+        let ctx = ui.ctx().clone();
+        let library = app.session.library.as_ref().map(|l| l.dir.clone());
+        let request = crate::pick::PickRequest::folder(crate::i18n::tr("Browse Folder…"));
+        if !crate::pick::defer(app, request, move |app, paths| {
+            if app.session.library.as_ref().map(|l| l.dir.clone()) == library {
+                apply_browse_folder(app, &ctx, paths);
             }
+        }) {
+            let paths = app.services.pick_folder.as_mut().and_then(|f| f()).into_iter().collect();
+            apply_browse_folder(app, ui.ctx(), paths);
         }
     }
     let hidden = app.ui.hidden_locations.len();
@@ -1052,7 +1053,10 @@ fn folder_tree(
                 key: "name".into(),
             });
         }
-        if app.services.pick_folder.is_some() && ui.button(crate::i18n::tr("Move Folder To…")).clicked() {
+        if (app.services.pick_folder.is_some() || app.services.picker.is_some())
+            && ui.button(crate::i18n::tr("Move Folder To…")).clicked()
+            && !defer_folder_move(app, ui.ctx(), path, true)
+        {
             let into = app.services.pick_folder.as_mut().and_then(|f| f());
             if let Some(into) = into {
                 match app.run("folder.move", json!({"path": path, "into": into})) {
@@ -1770,12 +1774,14 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
             });
             ui.close();
         }
-        if app.services.pick_folder.is_some() && ui.button(crate::i18n::tr("Move Folder To…")).clicked() {
-            let into = app.services.pick_folder.as_mut().and_then(|f| f());
-            if let Some(into) = into {
-                match app.run("folder.move", json!({"path": path, "into": into})) {
-                    Ok(r) => app.toast(ui.ctx(), format!("Moved; {} photo(s) relinked", r["relinked"])),
-                    Err(e) => app.toast(ui.ctx(), e),
+        if (app.services.pick_folder.is_some() || app.services.picker.is_some()) && ui.button(crate::i18n::tr("Move Folder To…")).clicked() {
+            if !defer_folder_move(app, ui.ctx(), path, false) {
+                let into = app.services.pick_folder.as_mut().and_then(|f| f());
+                if let Some(into) = into {
+                    match app.run("folder.move", json!({"path": path, "into": into})) {
+                        Ok(r) => app.toast(ui.ctx(), format!("Moved; {} photo(s) relinked", r["relinked"])),
+                        Err(e) => app.toast(ui.ctx(), e),
+                    }
                 }
             }
             ui.close();
@@ -1866,6 +1872,41 @@ fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode
             keyword_rows(app, ui, &n.children, indent + 16.0);
         }
     }
+}
+
+fn apply_browse_folder(app: &mut LightcraftApp, ctx: &egui::Context, paths: Vec<String>) {
+    let Some(path) = paths.into_iter().next() else { return };
+    match app.run("library.browse", json!({"path": path})) {
+        Ok(result) => {
+            let dir = result["path"].as_str().unwrap_or(&path).to_owned();
+            let _ = app.run("local.addRoot", json!({"path": dir}));
+        }
+        Err(error) => app.toast(ctx, error),
+    }
+}
+
+fn defer_folder_move(app: &mut LightcraftApp, ctx: &egui::Context, path: &str, translated: bool) -> bool {
+    let ctx = ctx.clone();
+    let path = path.to_owned();
+    let library = app.session.library.as_ref().map(|l| l.dir.clone());
+    let request = crate::pick::PickRequest::folder(crate::i18n::tr("Move Folder To…"));
+    crate::pick::defer(app, request, move |app, paths| {
+        if app.session.library.as_ref().map(|l| l.dir.clone()) != library {
+            return;
+        }
+        let Some(into) = paths.into_iter().next() else { return };
+        match app.run("folder.move", json!({"path": path, "into": into})) {
+            Ok(result) => app.toast(
+                &ctx,
+                if translated {
+                    crate::i18n::tr_format!("Moved; {} photo(s) relinked", result["relinked"])
+                } else {
+                    format!("Moved; {} photo(s) relinked", result["relinked"])
+                },
+            ),
+            Err(error) => app.toast(&ctx, error),
+        }
+    })
 }
 
 #[cfg(test)]

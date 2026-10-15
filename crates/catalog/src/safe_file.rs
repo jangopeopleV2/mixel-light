@@ -170,12 +170,37 @@ pub fn write_atomic_nosync(path: &Path, data: &[u8]) -> io::Result<()> {
 }
 
 /// Temp file (synced when `sync`) renamed over `path`, then the folder synced when `sync`.
+#[cfg(not(all(target_os = "macos", feature = "mac-app-store")))]
 fn replace_with(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
     let (tmp, n) = write_temp(path, sync, fill)?;
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
+    if sync {
+        sync_dir(parent_of(path));
+    }
+    Ok(n)
+}
+
+/// Publish through Foundation's same-volume staging location for a file-only sandbox grant.
+#[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+fn replace_with(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
+    let mut staged = crate::macos_atomic::StagedFile::new(path)?;
+    let limit = FAIL_AFTER.with(Cell::get);
+    let n = {
+        let mut w = Limited { inner: io::BufWriter::with_capacity(1 << 20, staged.file_mut()), n: 0, limit };
+        fill(&mut w)?;
+        w.flush()?;
+        let n = w.n;
+        let _ = w.inner.into_inner().map_err(|e| e.into_error())?;
+        n
+    };
+    if sync {
+        // The primitive performs this sync after applying the original permissions.
+        SYNCS.with(|count| count.set(count.get() + 1));
+    }
+    staged.commit_with_sync(sync)?;
     if sync {
         sync_dir(parent_of(path));
     }

@@ -322,23 +322,72 @@ pub(crate) trait MoveFs {
     /// Content observed in a packet, independent of its pathname or inode. Model volumes
     /// override this; disk implementations stream a bounded buffer without retaining the XML.
     fn packet_version(&self, path: &Path) -> std::io::Result<PacketVersion> {
-        use std::io::Read;
-        let mut file = std::fs::File::open(path)?;
-        let mut hash = lightcraft_preview::Hasher128::new();
-        let mut len = 0u64;
-        let mut buffer = [0u8; 16 * 1024];
-        loop {
-            let n = match file.read(&mut buffer) {
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                result => result?,
-            };
-            if n == 0 {
-                return Ok(PacketVersion { len, hash: hash.finish() });
-            }
-            let bytes = buffer.get(..n).ok_or_else(|| std::io::Error::other("invalid sidecar read length"))?;
-            len = len.checked_add(n as u64).ok_or_else(|| std::io::Error::other("sidecar is too large"))?;
-            hash.update(bytes);
+        packet_version_on_disk(path)
+    }
+}
+
+fn packet_version_on_disk(path: &Path) -> std::io::Result<PacketVersion> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hash = lightcraft_preview::Hasher128::new();
+    let mut len = 0u64;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let n = match file.read(&mut buffer) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if n == 0 {
+            return Ok(PacketVersion { len, hash: hash.finish() });
         }
+        let bytes = buffer.get(..n).ok_or_else(|| std::io::Error::other("invalid sidecar read length"))?;
+        len = len.checked_add(n as u64).ok_or_else(|| std::io::Error::other("sidecar is too large"))?;
+        hash.update(bytes);
+    }
+}
+
+fn resolve_disk_path(path: &Path) -> std::io::Result<PathBuf> {
+    crate::macos_mas::resolve(path).map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))
+}
+
+/// Resolution is performed before an existence test or a mutation. An original file grant
+/// never grants its parent or a destination folder: only explicit selected directory scopes do.
+fn operation_paths_with(
+    from: &Path,
+    to: &Path,
+    resolve: &dyn Fn(&Path) -> std::io::Result<PathBuf>,
+    directory_granted: &dyn Fn(&Path) -> bool,
+    sandboxed: bool,
+) -> std::io::Result<(PathBuf, PathBuf)> {
+    let current_from = resolve(from)?;
+    let current_to = resolve(to)?;
+    if sandboxed {
+        for path in [&current_from, &current_to] {
+            if !path.parent().is_some_and(directory_granted) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("Choose the folder containing {} with Import Folder before moving or renaming its files.", path.display()),
+                ));
+            }
+        }
+        // A denied separately bookmarked companion must not silently disappear from a move.
+        for base in [from, to, current_from.as_path(), current_to.as_path()] {
+            let full = PathBuf::from(format!("{}.xmp", base.to_string_lossy()));
+            for sidecar in [base.with_extension("xmp"), base.with_extension("XMP"), full.clone(), full.with_extension("XMP")] {
+                let _ = resolve(&sidecar)?;
+            }
+        }
+    }
+    Ok((current_from, current_to))
+}
+
+fn operation_paths(from: &Path, to: &Path) -> std::io::Result<(PathBuf, PathBuf)> {
+    operation_paths_with(from, to, &resolve_disk_path, &|p| crate::macos_mas::directory_granted(p), crate::macos_mas::enabled())
+}
+
+fn retained_after_move(path: &Path) {
+    if let Err(error) = crate::macos_mas::after_write(path) {
+        log::warn!("File operation completed, but future access could not be retained: {error}");
     }
 }
 
@@ -347,14 +396,24 @@ pub(crate) struct RealFs;
 
 impl MoveFs for RealFs {
     fn exists(&self, p: &Path) -> bool {
-        std::fs::symlink_metadata(p).is_ok()
+        match resolve_disk_path(p) {
+            Ok(path) => std::fs::symlink_metadata(path).is_ok(),
+            Err(error) => {
+                // Existence is also a non-authoritative rename-preview probe: reporting every
+                // candidate occupied would loop forever. Mutations re-resolve with Result first.
+                crate::macos_mas::notice(format!("Cannot inspect a rename destination: {error}"));
+                false
+            }
+        }
     }
 
     fn is_file(&self, p: &Path) -> bool {
-        p.is_file()
+        resolve_disk_path(p).is_ok_and(|path| path.is_file())
     }
 
     fn same_file(&self, a: &Path, b: &Path) -> bool {
+        let (Ok(a), Ok(b)) = (resolve_disk_path(a), resolve_disk_path(b)) else { return false };
+        let (a, b) = (a.as_path(), b.as_path());
         if a == b {
             return true;
         }
@@ -379,38 +438,67 @@ impl MoveFs for RealFs {
     }
 
     fn rename_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        let (a, b) = operation_paths(a, b)?;
+        let (a, b) = (a.as_path(), b.as_path());
         if self.exists(b) {
             return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("{} already exists", b.display())));
         }
         // A hard link fails when `b` exists — even if it appeared since the check above — so
         // nothing is ever replaced. Volumes without hard links (FAT, some network shares) fall back
         // to a plain rename after the check.
-        match std::fs::hard_link(a, b) {
+        let result = match std::fs::hard_link(a, b) {
             Ok(()) => std::fs::remove_file(a).inspect_err(|_| {
                 // both names are the same file: dropping the new one loses nothing
                 let _ = std::fs::remove_file(b);
             }),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e),
+            Err(e) if crate::macos_mas::enabled() => {
+                if e.kind() == std::io::ErrorKind::CrossesDevices {
+                    move_across_volumes(self, a, b)
+                } else {
+                    Err(e)
+                }
+            }
             Err(_) => std::fs::rename(a, b)
                 .or_else(|e| if e.kind() == std::io::ErrorKind::CrossesDevices { move_across_volumes(self, a, b) } else { Err(e) }),
+        };
+        if result.is_ok() {
+            retained_after_move(b);
         }
+        result
     }
 
     fn copy_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        let (a, b) = operation_paths(a, b)?;
+        let (a, b) = (a.as_path(), b.as_path());
         use std::io::Write;
         let bytes = std::fs::read(a)?;
         let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(b)?;
         f.write_all(&bytes).and_then(|_| f.sync_all()).inspect_err(|_| {
             let _ = std::fs::remove_file(b);
-        })
+        })?;
+        retained_after_move(b);
+        Ok(())
     }
 
     fn remove_file(&self, p: &Path) -> std::io::Result<()> {
-        std::fs::remove_file(p)
+        let path = resolve_disk_path(p)?;
+        if crate::macos_mas::enabled() && !path.parent().is_some_and(crate::macos_mas::directory_granted) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Select the containing folder before removing a file during a move.",
+            ));
+        }
+        std::fs::remove_file(path)
     }
 
     fn stem_sibling(&self, sidecar: &Path) -> Option<String> {
-        crate::import_move::sibling_photo(sidecar)
+        let sidecar = resolve_disk_path(sidecar).ok()?;
+        crate::import_move::sibling_photo(&sidecar)
+    }
+
+    fn packet_version(&self, path: &Path) -> std::io::Result<PacketVersion> {
+        packet_version_on_disk(&resolve_disk_path(path)?)
     }
 }
 
@@ -1122,6 +1210,55 @@ impl Session {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_move_paths_resolve_before_requiring_explicit_directory_scopes() {
+        let resolve = |path: &Path| -> std::io::Result<PathBuf> {
+            Ok(path.strip_prefix("/saved").map(|suffix| Path::new("/current").join(suffix)).unwrap_or_else(|_| path.to_path_buf()))
+        };
+        let allowed = |dir: &Path| dir == Path::new("/current/photos");
+        let (from, to) = operation_paths_with(Path::new("/saved/photos/a.jpg"), Path::new("/saved/photos/b.jpg"), &resolve, &allowed, true).unwrap();
+        assert_eq!(from, Path::new("/current/photos/a.jpg"));
+        assert_eq!(to, Path::new("/current/photos/b.jpg"));
+        assert_eq!(
+            operation_paths_with(Path::new("/saved/photos/a.jpg"), Path::new("/saved/other/b.jpg"), &resolve, &allowed, true).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            operation_paths_with(Path::new("/saved/photos/a.jpg"), Path::new("/saved/photos/b.jpg"), &resolve, &|_| false, true).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn denied_move_endpoint_or_companion_never_reaches_a_mutation() {
+        for denied in ["/saved/a.jpg", "/saved/b.jpg", "/saved/a.xmp", "/saved/a.JPG.xmp"] {
+            let source = if denied.ends_with("JPG.xmp") { "/saved/a.JPG" } else { "/saved/a.jpg" };
+            let resolve = |path: &Path| -> std::io::Result<PathBuf> {
+                if path == Path::new(denied) {
+                    Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "bookmark denied"))
+                } else {
+                    Ok(path.to_path_buf())
+                }
+            };
+            let mut mutated = false;
+            let result = operation_paths_with(Path::new(source), Path::new("/saved/b.jpg"), &resolve, &|_| true, true).map(|_| {
+                mutated = true;
+            });
+            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied, "{denied}");
+            assert!(!mutated, "a denied resolution cannot be treated as a missing companion: {denied}");
+        }
+    }
+
+    #[test]
+    fn ordinary_desktop_move_paths_do_not_require_sandbox_directory_grants() {
+        let resolve = |path: &Path| Ok(path.to_path_buf());
+        let paths =
+            operation_paths_with(Path::new("a.jpg"), Path::new("b.jpg"), &resolve, &|_| panic!("desktop must not request sandbox scopes"), false)
+                .unwrap();
+        assert_eq!(paths, (PathBuf::from("a.jpg"), PathBuf::from("b.jpg")));
+    }
+
     use std::cell::RefCell;
 
     /// The cross-volume move's check compares files chunk by chunk: equal files across several

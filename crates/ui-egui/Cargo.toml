@@ -9,6 +9,9 @@ description = "MIXEL Light egui frontend (Lightroom-style UI); swappable — not
 [lints]
 workspace = true
 
+[features]
+mac-app-store = ["lightcraft-engine/mac-app-store"]
+
 [dependencies]
 craft-ui = { workspace = true }
 lightcraft-geom = { workspace = true }

@@ -8,6 +8,9 @@ description = "MIXEL Light library: photos, albums, ratings/flags, search/filter
 [lints]
 workspace = true
 
+[features]
+mac-app-store = ["dep:objc2-foundation"]
+
 [dependencies]
 lightcraft-develop = { workspace = true }
 lightcraft-meta = { workspace = true }
@@ -22,3 +25,6 @@ web-time = { workspace = true }
 [dev-dependencies]
 lightcraft-geom = { workspace = true }
 proptest = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSFileManager", "NSPathUtilities", "NSString", "NSURL", "NSError", "NSDictionary"], optional = true }

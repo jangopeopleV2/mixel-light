@@ -243,13 +243,27 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .map(|v| v["downloads"].as_array().cloned().unwrap_or_default())
         .unwrap_or_default();
     heading(ui, t, "Models");
-    let r = ui.add_enabled(runtime && app.services.pick_denoise_model.is_some(), egui::Button::new(tr("Install from file…")));
+    let r = ui.add_enabled(
+        runtime && (app.services.pick_denoise_model.is_some() || app.services.picker.is_some()),
+        egui::Button::new(tr("Install from file…")),
+    );
     register(ui.ctx(), "denoise:installFile", r.rect);
-    if r.clicked()
-        && let Some(path) = app.services.pick_denoise_model.as_mut().and_then(|f| f().into_iter().next())
-        && let Ok(info) = app.run("denoise.models.inspect", json!({"path": path}))
-    {
-        app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
+    if r.clicked() {
+        let request = crate::pick::PickRequest::file(tr("Install denoise model"), "ONNX model", &["onnx"]);
+        if !crate::pick::defer(app, request, |app, paths| {
+            if !matches!(app.ui.dialog, Some(crate::state::Dialog::Settings { .. })) {
+                return;
+            }
+            if let Some(path) = paths.into_iter().next()
+                && let Ok(info) = app.run("denoise.models.inspect", json!({"path": path}))
+            {
+                app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
+            }
+        }) && let Some(path) = app.services.pick_denoise_model.as_mut().and_then(|f| f().into_iter().next())
+            && let Ok(info) = app.run("denoise.models.inspect", json!({"path": path}))
+        {
+            app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
+        }
     }
     if all.is_empty() {
         hint(ui, t, "Install your own ONNX model with denoise-model.json beside it. This build offers no model downloads.");

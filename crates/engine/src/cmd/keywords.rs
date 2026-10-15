@@ -445,8 +445,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut r = json!({"keywords": file.written.len(), "captureOneRefuses": refuses, "unwritable": file.unwritable});
                 match str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
                     Some(path) => {
-                        std::fs::write(path, &file.text).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
-                        r["path"] = json!(path);
+                        let actual = super::preset_files::selected_export_path(path, None).map_err(|error| bad("keyword.export", error))?;
+                        let target = actual.to_str().ok_or_else(|| bad("keyword.export", "The resolved export path is not valid Unicode"))?;
+                        #[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+                        crate::export::write_file_durable(target, file.text.as_bytes()).map_err(crate::EngineError::Other)?;
+                        #[cfg(not(all(target_os = "macos", feature = "mac-app-store")))]
+                        std::fs::write(target, &file.text).map_err(|e| crate::EngineError::Other(format!("{target}: {e}")))?;
+                        r["path"] = json!(actual.to_string_lossy());
                     }
                     None => r["text"] = json!(file.text),
                 }

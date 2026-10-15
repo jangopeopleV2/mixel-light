@@ -115,7 +115,7 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.label(RichText::new(location).color(t.text));
     });
     row(ui, t, "", |ui| {
-        let can = app.services.pick_folder.is_some();
+        let can = app.services.pick_folder.is_some() || app.services.picker.is_some();
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Open Library…")));
         register(ui.ctx(), "button:settingsOpenLibrary", r.rect);
         if r.clicked() {
@@ -364,14 +364,27 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         hint(ui, t, crate::i18n::tr("Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete."));
         row(ui, t, crate::i18n::tr("Watched folder"), |ui| {
             ui.label(RichText::new(d.auto_folder.clone().unwrap_or_else(|| crate::i18n::tr("Off").into())).color(t.text));
-            let can = app.services.pick_folder.is_some();
+            let can = app.services.pick_folder.is_some() || app.services.picker.is_some();
             let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose…")));
             register(ui.ctx(), "button:settingsAutoFolder", r.rect);
-            if r.clicked()
-                && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
-                && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
-            {
-                app.toast(ui.ctx(), e);
+            if r.clicked() {
+                let ctx = ui.ctx().clone();
+                let library = app.session.library.as_ref().map(|l| l.dir.clone());
+                let request = crate::pick::PickRequest::folder(crate::i18n::tr("Choose watched folder"));
+                if !crate::pick::defer(app, request, move |app, paths| {
+                    if !settings_selection_current(app, &library) {
+                        return;
+                    }
+                    if let Some(folder) = paths.into_iter().next()
+                        && let Err(error) = app.run("library.autoImport", json!({"folder": folder}))
+                    {
+                        app.toast(&ctx, error);
+                    }
+                }) && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
+                    && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
             }
             if d.auto_folder.is_some() && ui.button(crate::i18n::tr("Turn Off")).clicked() {
                 let _ = app.run("library.autoImport", json!({"folder": null}));
@@ -531,13 +544,25 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let mut result = None;
     ui.horizontal(|ui| {
         ui.add_space(LABEL_W);
-        if app.services.pick_folder.is_some() {
+        if app.services.pick_folder.is_some() || app.services.picker.is_some() {
             let r = ui.button(crate::i18n::tr("Choose Folder…"));
             register(ui.ctx(), "button:settingsSmartChoose", r.rect);
-            if r.clicked()
-                && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
-            {
-                result = Some(app.run("library.smartPreviewsLocation", json!({"path": dir, "existing": existing})));
+            if r.clicked() {
+                let ctx = ui.ctx().clone();
+                let library = app.session.library.as_ref().map(|l| l.dir.clone());
+                let request = crate::pick::PickRequest::folder(crate::i18n::tr("Choose smart previews folder"));
+                if !crate::pick::defer(app, request, move |app, paths| {
+                    if !settings_selection_current(app, &library) {
+                        return;
+                    }
+                    if let Some(dir) = paths.into_iter().next() {
+                        let result = app.run("library.smartPreviewsLocation", json!({"path": dir, "existing": existing}));
+                        show_smart_location_result(app, &ctx, cache, existing, result);
+                    }
+                }) && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
+                {
+                    result = Some(app.run("library.smartPreviewsLocation", json!({"path": dir, "existing": existing})));
+                }
             }
         }
         let r = ui.add_enabled(custom, egui::Button::new(crate::i18n::tr("Use Library Folder")));
@@ -546,21 +571,8 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             result = Some(app.run("library.smartPreviewsLocation", json!({"reset": true, "existing": existing})));
         }
     });
-    if let Some(r) = result {
-        ui.data_mut(|d| d.remove::<(f64, Value)>(cache));
-        match r {
-            Ok(v) => {
-                let failed = v["failed"].as_array().map_or(0, Vec::len);
-                let msg = match (existing, v["handled"].as_u64().unwrap_or(0)) {
-                    (_, 0) => "Smart previews folder changed".to_string(),
-                    ("move", n) => format!("Smart previews folder changed; moved {n}"),
-                    ("discard", n) => format!("Smart previews folder changed; deleted {n}"),
-                    _ => "Smart previews folder changed".to_string(),
-                };
-                app.toast(ui.ctx(), if failed > 0 { crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg) } else { msg });
-            }
-            Err(e) => app.toast(ui.ctx(), e),
-        }
+    if let Some(result) = result {
+        show_smart_location_result(app, ui.ctx(), cache, existing, result);
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
 }
@@ -584,13 +596,21 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     });
     row(ui, t, "", |ui| {
-        let can = app.services.pick_display_profile.is_some();
+        let can = app.services.pick_display_profile.is_some() || app.services.picker.is_some();
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose Profile…")));
         register(ui.ctx(), "button:settingsDisplayProfile", r.rect);
-        if r.clicked()
-            && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
-        {
-            app.ui.settings.display_profile = path;
+        if r.clicked() {
+            let request = crate::pick::PickRequest::file(crate::i18n::tr("Choose Monitor Profile"), "ICC Profiles", &["icc", "icm"]);
+            if !crate::pick::defer(app, request, |app, paths| {
+                if matches!(app.ui.dialog, Some(crate::state::Dialog::Settings { .. }))
+                    && let Some(path) = paths.into_iter().next()
+                {
+                    app.ui.settings.display_profile = path;
+                }
+            }) && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
+            {
+                app.ui.settings.display_profile = path;
+            }
         }
         // with no profile chosen, previews follow the screen's own profile where the host knows it
         let none = if app.services.screen_profile.is_some() { crate::i18n::tr("Use Screen Profile") } else { crate::i18n::tr("Use sRGB") };
@@ -993,7 +1013,7 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
         Some(_) => return Err("app.newLibrary: name must be a string".into()),
     };
     // from the menu: ask for the name first (default prefilled), then for the location
-    if name.is_none() && p.get("path").is_none() && app.services.pick_folder.is_some() {
+    if name.is_none() && p.get("path").is_none() && (app.services.pick_folder.is_some() || app.services.picker.is_some()) {
         crate::panels::dialogs::prompt(
             app,
             "New Library",
@@ -1122,4 +1142,42 @@ pub fn display_profile(app: &mut LightcraftApp, p: &Value) -> Result<Value, Stri
         Some(d) => d.describe(),
         None => json!({"path": null, "description": "sRGB (no display profile)"}),
     })
+}
+
+fn settings_selection_current(app: &LightcraftApp, library: &Option<std::path::PathBuf>) -> bool {
+    matches!(app.ui.dialog, Some(crate::state::Dialog::Settings { .. })) && app.session.library.as_ref().map(|l| l.dir.clone()) == *library
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn show_smart_location_result(app: &mut LightcraftApp, ctx: &egui::Context, cache: egui::Id, existing: &str, result: Result<Value, String>) {
+    ctx.data_mut(|d| d.remove::<(f64, Value)>(cache));
+    match result {
+        Ok(v) => {
+            let failed = v["failed"].as_array().map_or(0, Vec::len);
+            let msg = match (existing, v["handled"].as_u64().unwrap_or(0)) {
+                (_, 0) => "Smart previews folder changed".to_string(),
+                ("move", n) => format!("Smart previews folder changed; moved {n}"),
+                ("discard", n) => format!("Smart previews folder changed; deleted {n}"),
+                _ => "Smart previews folder changed".to_string(),
+            };
+            app.toast(ctx, if failed > 0 { crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg) } else { msg });
+        }
+        Err(error) => app.toast(ctx, error),
+    }
+}
+
+#[cfg(test)]
+mod deferred_settings_selection_tests {
+    use super::*;
+    #[test]
+    fn delayed_folder_answer_is_only_for_its_open_settings_and_library() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+        app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "import".into() });
+        assert!(settings_selection_current(&app, &None));
+        assert!(!settings_selection_current(&app, &Some("/previous/library".into())));
+        app.ui.dialog = Some(crate::state::Dialog::About);
+        assert!(!settings_selection_current(&app, &None));
+        app.ui.dialog = None;
+        assert!(!settings_selection_current(&app, &None));
+    }
 }

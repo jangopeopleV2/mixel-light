@@ -538,6 +538,8 @@ fn watermark_coverage(
 
 /// A watermark graphic, decoded once per file (and again when the file changes).
 fn watermark_logo(path: &str) -> Option<std::sync::Arc<Rgba8>> {
+    let resolved = crate::macos_mas::resolve(path).ok()?;
+    let path = resolved.to_str()?;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     static CACHE: Mutex<Option<HashMap<String, (std::time::SystemTime, Arc<Rgba8>)>>> = Mutex::new(None);
@@ -1684,7 +1686,10 @@ impl PreparedExport {
             Work::File { path, read, packet, dng, label, size, remove_location } => {
                 let bytes = match &read {
                     Some(r) => r(&path)?,
-                    None => std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?,
+                    None => {
+                        let actual = crate::macos_mas::resolve(&path)?;
+                        std::fs::read(&actual).map_err(|e| format!("{}: {e}", actual.display()))?
+                    }
                 };
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
@@ -1870,11 +1875,18 @@ pub fn write_file_durable(path: &str, bytes: &[u8]) -> Result<(), String> {
 
 fn write_with(path: &str, bytes: &[u8], durable: bool) -> Result<(), String> {
     use lightcraft_catalog::safe_file::{write_atomic, write_atomic_nosync};
-    let p = std::path::Path::new(path);
+    let resolved = crate::macos_mas::resolve(path)?;
+    let p = resolved.as_path();
     if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    if durable { write_atomic(p, bytes) } else { write_atomic_nosync(p, bytes) }.map_err(|e| format!("{path}: {e}"))
+    if durable { write_atomic(p, bytes) } else { write_atomic_nosync(p, bytes) }.map_err(|e| format!("{path}: {e}"))?;
+    // The bytes are saved even if persisting access fails. Surface the bookmark warning
+    // through the normal host notice queue instead of claiming that the save failed.
+    if let Err(error) = crate::macos_mas::after_write(p) {
+        log::warn!("Saved {}, but access could not be retained: {error}", p.display());
+    }
+    Ok(())
 }
 
 /// The path of the sidecar with extension `ext` of the exported file `main`.
@@ -1903,8 +1915,70 @@ pub fn run_batch(
     stop_on_error: bool,
     progress: &mut dyn FnMut(usize, &str) -> bool,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let lanes = export_parallelism(items.len());
-    run_batch_with(items, &mut Placer::new(o, to, write, exists, stop_on_error), progress, lanes)
+    let access = BatchAccess {
+        sandboxed: crate::macos_mas::enabled(),
+        resolve: &|p| crate::macos_mas::resolve(p),
+        directory_granted: &|p| crate::macos_mas::directory_granted(p),
+    };
+    with_batch_destination(items, o, to, access, |items, destination| {
+        let lanes = export_parallelism(items.len());
+        run_batch_with(items, &mut Placer::new(o, &destination, write, exists, stop_on_error), progress, lanes)
+    })
+}
+
+/// Existing authority only: a typed/remembered destination never creates a directory grant.
+struct BatchAccess<'a> {
+    sandboxed: bool,
+    resolve: &'a dyn Fn(&std::path::Path) -> Result<std::path::PathBuf, String>,
+    directory_granted: &'a dyn Fn(&std::path::Path) -> bool,
+}
+
+/// Check all captured names before rendering, collision probes, progress or the first write.
+/// Unique conflict suffixes stay in the same explicitly granted directory. The only file-only
+/// case is one exact Save destination without a companion; ordinary hosts keep their old flow.
+fn with_batch_destination<R>(
+    items: Vec<PreparedExport>,
+    o: &ExportOptions,
+    to: &Destination,
+    access: BatchAccess<'_>,
+    run: impl FnOnce(Vec<PreparedExport>, Destination) -> Result<R, String>,
+) -> Result<R, String> {
+    let destination = resolve_destination(to, access.resolve)?;
+    if access.sandboxed {
+        let exact = destination.exact.as_deref().filter(|_| items.len() == 1);
+        let dir = if o.subfolder.is_empty() { destination.dir.clone() } else { join_path(&destination.dir, &o.subfolder) };
+        for item in &items {
+            // Original export always carries its XMP packet; rendered images and re-encoded
+            // DNGs have no external packet. This is known before reading or rendering pixels.
+            let xmp = matches!(&item.work, Work::File { dng: None, .. });
+            if exact.is_some() && !xmp {
+                continue;
+            }
+            let main = exact.map(str::to_owned).unwrap_or_else(|| join_path(&dir, &item.file_name));
+            let paths = std::iter::once(main.clone()).chain(xmp.then(|| sidecar_path(&main, "xmp")));
+            for path in paths {
+                let actual = (access.resolve)(std::path::Path::new(&path))?;
+                let parent = actual
+                    .parent()
+                    .filter(|p| p.is_absolute() && !p.components().any(|c| matches!(c, std::path::Component::ParentDir)))
+                    .ok_or("Choose an absolute export folder with the folder picker before exporting")?;
+                if !(access.directory_granted)(parent) {
+                    return Err(format!(
+                        "Choose export folder {} with the folder picker before exporting photos and companion files",
+                        parent.display()
+                    ));
+                }
+            }
+        }
+    }
+    run(items, destination)
+}
+
+fn resolve_destination(to: &Destination, resolve: impl Fn(&std::path::Path) -> Result<std::path::PathBuf, String>) -> Result<Destination, String> {
+    let resolved = |p: &str| -> Result<String, String> {
+        Ok(resolve(std::path::Path::new(p))?.to_str().ok_or("Export destination is not valid Unicode")?.to_owned())
+    };
+    Ok(Destination { dir: if to.dir.is_empty() { String::new() } else { resolved(&to.dir)? }, exact: to.exact.as_deref().map(resolved).transpose()? })
 }
 
 /// How many photos of a batch of `n` render side by side. Each render already spreads its rows
@@ -2146,6 +2220,15 @@ impl<'a> Placer<'a> {
         let write = &mut *self.write;
         let written = path.and_then(|path| {
             let files = group(&path);
+            if files.len() > 1 {
+                let parent = std::path::Path::new(&path).parent().ok_or("Export has no containing folder")?;
+                if !crate::macos_mas::directory_granted(parent) {
+                    return Err(format!(
+                        "Select export folder {} with the folder picker before exporting an original with its XMP sidecar",
+                        parent.display()
+                    ));
+                }
+            }
             // never over an original, whatever the conflict policy or the exact path said
             for f in &files {
                 guard.check(std::path::Path::new(f))?;
@@ -2173,6 +2256,10 @@ impl<'a> Placer<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "export_access_tests.rs"]
+mod access_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3173,5 +3260,19 @@ mod tests {
         assert_eq!(render_weight(1000 * 500, 1000, SourceLevel::Preview, 0), 1000 * 500 * 12);
         assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
         assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
+    }
+}
+
+#[cfg(test)]
+mod sandbox_destination_tests {
+    use super::*;
+    #[test]
+    fn moved_export_destination_is_resolved_before_conflict_checks() {
+        let original = Destination { dir: "/old/output".into(), exact: Some("/old/output/chosen.jpg".into()) };
+        let actual = resolve_destination(&original, |p| Ok(std::path::PathBuf::from(p.to_string_lossy().replacen("/old/", "/current/", 1)))).unwrap();
+        assert_eq!(actual.dir, "/current/output");
+        assert_eq!(actual.exact.as_deref(), Some("/current/output/chosen.jpg"));
+        assert_eq!(original.dir, "/old/output");
+        assert!(resolve_destination(&original, |_| Err("reselect export folder".into())).unwrap_err().contains("reselect"));
     }
 }

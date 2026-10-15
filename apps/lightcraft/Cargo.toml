@@ -11,6 +11,7 @@ workspace = true
 
 [features]
 default = ["denoise"]
+mac-app-store = ["dep:raw-window-handle", "lightcraft-engine/mac-app-store", "lightcraft-ui-egui/mac-app-store"]
 denoise = ["lightcraft-engine/denoise"]
 rawnind-model = ["denoise", "lightcraft-engine/rawnind-model"]
 # Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
@@ -44,6 +45,7 @@ rfd = { workspace = true }
 zbus = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = { version = "=0.6.2", optional = true }
 muda = { workspace = true }
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }

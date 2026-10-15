@@ -134,7 +134,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 };
                 button(ui, "libraryRetry", "Try Again", problem.can_retry && !problem.path.is_empty(), Choice::Retry);
-                button(ui, "libraryChoose", "Choose Another Library…", app.services.pick_folder.is_some(), Choice::Choose);
+                button(
+                    ui,
+                    "libraryChoose",
+                    "Choose Another Library…",
+                    app.services.pick_folder.is_some() || app.services.picker.is_some(),
+                    Choice::Choose,
+                );
                 button(ui, "libraryTemporary", "Continue Without Saving", true, Choice::Temporary);
                 button(ui, "libraryQuit", "Quit", true, Choice::Quit);
             });

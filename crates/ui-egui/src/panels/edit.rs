@@ -695,15 +695,26 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 if let Some(n) = &device {
                     let _ = ui.selectable_label(true, n);
                 }
-                if app.services.pick_display_profile.is_some() && ui.selectable_label(false, crate::i18n::tr("Other…")).clicked() {
+                if (app.services.pick_display_profile.is_some() || app.services.picker.is_some())
+                    && ui.selectable_label(false, crate::i18n::tr("Other…")).clicked()
+                {
                     pick = true;
                 }
             });
-            if pick
-                && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
-                && let Err(e) = app.run("view.softProof", json!({"profile": path}))
-            {
-                app.toast(ui.ctx(), e);
+            if pick {
+                let ctx = ui.ctx().clone();
+                let request = crate::pick::PickRequest::file(crate::i18n::tr("Choose Monitor Profile"), "ICC Profiles", &["icc", "icm"]);
+                if !crate::pick::defer(app, request, move |app, paths| {
+                    if let Some(path) = paths.into_iter().next()
+                        && let Err(error) = app.run("view.softProof", json!({"profile": path}))
+                    {
+                        app.toast(&ctx, error);
+                    }
+                }) && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
+                    && let Err(e) = app.run("view.softProof", json!({"profile": path}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
             }
         });
         if app.ui.proof_profile.is_some() {
@@ -1001,11 +1012,18 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                     crate::panels::dialogs::prompt(app, "Save Point Curve Preset", "Preset name", "", "curve.savePreset", json!({}), "name");
                     ui.close();
                 }
-                if ui.add_enabled(app.services.pick_curve_preset_files.is_some(), egui::Button::new(crate::i18n::tr("Import Presets…"))).clicked() {
+                if ui
+                    .add_enabled(
+                        app.services.pick_curve_preset_files.is_some() || app.services.picker.is_some(),
+                        egui::Button::new(crate::i18n::tr("Import Presets…")),
+                    )
+                    .clicked()
+                {
                     let _ = app.run("file.importCurvePresets", json!({}));
                     ui.close();
                 }
-                let can_export = app.services.save_curve_preset_file.is_some() && !app.session.curve_presets.is_empty();
+                let can_export =
+                    (app.services.save_curve_preset_file.is_some() || app.services.picker.is_some()) && !app.session.curve_presets.is_empty();
                 if ui.add_enabled(can_export, egui::Button::new(crate::i18n::tr("Export Presets…"))).clicked() {
                     let _ = app.run("file.exportCurvePresets", json!({}));
                     ui.close();

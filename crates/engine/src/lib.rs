@@ -48,6 +48,7 @@ pub mod lightroom_folder;
 pub mod lightroom_job;
 mod lightroom_sqlite;
 pub mod logging;
+pub mod macos_mas;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -415,6 +416,14 @@ impl Session {
         }
         let empty = Value::Object(Default::default());
         let params = if params.is_null() { &empty } else { params };
+        let mut resolved;
+        let params = if macos_mas::enabled() {
+            resolved = params.clone();
+            macos_mas::resolve_params(&mut resolved).map_err(EngineError::Other)?;
+            &resolved
+        } else {
+            params
+        };
         self.run_command(id, spec.journal.then_some(params), |s| (spec.run)(s, params))
     }
 

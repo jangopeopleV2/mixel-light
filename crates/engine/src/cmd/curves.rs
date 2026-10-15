@@ -336,10 +336,7 @@ fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
 fn export_presets(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "curve.exportPresets";
     let path = str_param(p, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;
-    let mut path = std::path::PathBuf::from(path);
-    if path.extension().is_none() {
-        path.set_extension(CURVE_PRESET_EXT);
-    }
+    let path = super::preset_files::selected_export_path(path, Some(CURVE_PRESET_EXT)).map_err(|error| bad(C, error))?;
     let names: Option<Vec<String>> =
         p.get("names").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
     let chosen: Vec<CurvePreset> = match &names {
@@ -349,9 +346,17 @@ fn export_presets(s: &mut Session, p: &Value) -> Result<Value> {
     if chosen.is_empty() {
         return Err(bad(C, "no curve presets to export (save one first, or pass names)"));
     }
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir).map_err(|e| crate::EngineError::Other(format!("{}: {e}", dir.display())))?;
+    #[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+    {
+        let target = path.to_str().ok_or_else(|| bad(C, "The resolved export path is not valid Unicode"))?;
+        crate::export::write_file_durable(target, to_file(&chosen).as_bytes()).map_err(crate::EngineError::Other)?;
     }
-    std::fs::write(&path, to_file(&chosen)).map_err(|e| crate::EngineError::Other(format!("{}: {e}", path.display())))?;
+    #[cfg(not(all(target_os = "macos", feature = "mac-app-store")))]
+    {
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(|e| crate::EngineError::Other(format!("{}: {e}", dir.display())))?;
+        }
+        std::fs::write(&path, to_file(&chosen)).map_err(|e| crate::EngineError::Other(format!("{}: {e}", path.display())))?;
+    }
     Ok(json!({"path": path.display().to_string(), "count": chosen.len()}))
 }

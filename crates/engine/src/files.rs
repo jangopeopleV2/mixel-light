@@ -686,6 +686,8 @@ fn fit_box(max_edge: usize) -> lightcraft_codecs::DecodeOptions {
 /// file, which is what the decode of one can hold.
 pub fn fs_preview_loader() -> PreviewLoader {
     Arc::new(|path: &str, max_edge: usize| {
+        let resolved = crate::macos_mas::resolve(path).ok()?;
+        let path = resolved.to_str()?;
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(len.saturating_mul(2)) } else { gate.acquire_urgent(len.saturating_mul(2)) };
@@ -730,6 +732,8 @@ impl PreviewRead {
 /// whole-file fallback stays in charge.
 pub fn preview_window(path: &str) -> Result<Option<(Vec<u8>, Vec<u8>, PreviewRead)>, String> {
     use std::io::{Read, Seek, SeekFrom};
+    let resolved = crate::macos_mas::resolve(path)?;
+    let path = resolved.to_str().ok_or("Preview source path is not valid Unicode")?;
 
     let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
     let total = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
@@ -822,6 +826,8 @@ fn quick_image_srgb(header: &[u8], window: &[u8], max_edge: usize) -> Option<lig
 /// denoised picture. It holds two pictures at once, so it counts for more at the memory gate than a plain load.
 pub fn fs_pair_loader() -> PairLoader {
     Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec| {
+        let resolved = crate::macos_mas::resolve(path)?;
+        let path = resolved.to_str().ok_or("File path is not valid Unicode")?;
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
@@ -842,6 +848,8 @@ pub fn fs_pair_loader() -> PairLoader {
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| {
+        let resolved = crate::macos_mas::resolve(path)?;
+        let path = resolved.to_str().ok_or("File path is not valid Unicode")?;
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 };
         let gate = crate::memory::work_gate();
@@ -853,6 +861,8 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         r
     });
     let probe: FileProbe = Arc::new(|path: &str| {
+        let resolved = crate::macos_mas::resolve(path)?;
+        let path = resolved.to_str().ok_or("File path is not valid Unicode")?;
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let _permit = crate::memory::work_gate().acquire(len);
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
@@ -870,6 +880,10 @@ impl crate::Session {
         self.media.file_probe = Some(p);
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());
+        self.media.file_bytes = Some(Arc::new(|path| {
+            let resolved = crate::macos_mas::resolve(path)?;
+            std::fs::read(&resolved).map_err(|e| format!("{}: {e}", resolved.display()))
+        }));
         #[cfg(target_os = "macos")]
         {
             self.apple_photos = Some(crate::apple_photos::osascript());
