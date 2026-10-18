@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (rapid slider entry; LR-PROF-CAMERACOLOR: tone curve from black-and-white camera JPEGs; LR-VIEW-ZOOM, LR-VIEW-COMPARE: Compare and Reference zoom windows; LR-IMP-FORMATS, LR-IMP-CAMERA-COVERAGE: EOS R5 Mark II CR3 decodes; renamed from `parity.md`; Top gaps moved to gaps.md, shortcut notes to ui-parity.md; filesystem history retry/Undo/Redo evidence; renamed from `parity.md`; Top gaps moved to gaps.md, shortcut notes to ui-parity.md) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** patch (record the MIXEL Privacy Policy host menu outside Lightroom parity; in-scope counts unchanged) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -50,10 +50,10 @@ cited here still exists. Formerly docs/parity.md.
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
-| Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Y. Menus | 84 | 0 | 4 | 9 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 76 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 34 | 16 | 35 | 8 | — | 24/26 (92%) |
-| **Total** | 408 | 51 | 72 | 35 | 193/201 (96%) | 145/157 (92%) |
+| **Total** | 408 | 51 | 72 | 36 | 193/201 (96%) | 145/157 (92%) |
 
 Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **81.6%** of 531 in-scope rows — P0 98.0% of 201 · P1 95.2% of 157 · P2 50.0% of 172.
 <!-- /parity:summary -->
@@ -489,6 +489,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 |---|---|---|---|---|---|
 | MENU-BAR | Menu bar rendering | P1 | ✅ | `crates/ui-egui/src/menubar.rs`, `apps/lightcraft/src/native_menu.rs` | native macOS menu bar (muda) with live labels/enabled/checked; in-window menus on web/Windows/Linux (with one menu open, the pointer on another title switches to it, as in native menu bars); ⌫ and X stay egui-handled (contextual), so they show no key in the native menu; a scrolled menu draws no scrollbar over its rows: the ▲ / ▼ strips, the wheel and dragging scroll it (issue #691: egui's floating bar hid the shortcut text's last character; `crates/ui-egui/src/tests_menubar.rs`) |
 | MENU-APP-ABOUT | About | P2 | ✅ | `cmd:app.about` | |
+| MENU-APP-PRIVACY-POLICY | Privacy Policy (MIXEL) | OOS | 🚫 | `apps/lightcraft/src/native_menu.rs:24`, `apps/lightcraft/src/native_menu.rs:235`, `apps/lightcraft/src/native_menu.rs:370` | Implemented MIXEL macOS app-menu host action `mixel.host.privacy-policy`, immediately after About, with no shortcut. Opens the fixed [MIXEL Craft privacy policy](https://www.mixel.ch/legal/craft/privacy/) through the system browser service and reports an unavailable browser as a notice. A MIXEL legal link, not a Lightroom parity feature or an engine/control command; excluded from parity completion. |
 | MENU-APP-SETTINGS | Settings… | P0 | ✅ | `cmd:app.settings` | app menu on macOS, Edit menu elsewhere |
 | MENU-APP-UPDATES | Check for updates | P2 | ⬜ | | |
 | MENU-APP-SYNC | Sync status / pause | OOS | 🚫 | | |
@@ -787,6 +788,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | patch | Record the implemented MIXEL macOS Privacy Policy host menu as outside Lightroom parity; no listed gap closes and in-scope statuses/counts stay unchanged. |
 | 2026-10-11 | minor | KEY-SLIDER-TYPE: honor immediate Return/Escape and keep typed keys in the value editor; add regression references |
 | 2026-10-11 | minor | LR-PROF-CAMERACOLOR: raws with a black-and-white camera JPEG take its tone curve (issue #577) |
 | 2026-10-11 | minor | LR-VIEW-ZOOM and LR-VIEW-COMPARE: Compare and Reference are sharp at 1:1 (zoom windows per pane, two originals kept decoded while they are open); statuses unchanged |

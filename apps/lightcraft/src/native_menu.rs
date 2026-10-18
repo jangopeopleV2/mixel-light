@@ -21,6 +21,9 @@ use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::Value;
 
+const PRIVACY_POLICY: &str = "mixel.host.privacy-policy";
+const PRIVACY_POLICY_URL: &str = "https://www.mixel.ch/legal/craft/privacy/";
+
 const QUIT: &str = "app.quit";
 /// Settings… (the app menu on macOS; Edit elsewhere).
 const SETTINGS: &str = "app.settings";
@@ -229,10 +232,12 @@ impl NativeMenu {
         // the application menu
         let app_menu = Submenu::new("MIXEL Light", true);
         let about = MenuItem::with_id("app.about", lightcraft_ui_egui::i18n::tr("About MIXEL Light"), true, None);
+        let privacy = MenuItem::with_id(PRIVACY_POLICY, "Privacy Policy", true, None);
         let settings = MenuItem::with_id(SETTINGS, lightcraft_ui_egui::i18n::tr("Settings…"), true, accelerator(SETTINGS_KEY));
         let quit = MenuItem::with_id(QUIT, lightcraft_ui_egui::i18n::tr("Quit MIXEL Light"), true, accelerator("Cmd+Q"));
         let _ = app_menu.append_items(&[
             &about,
+            &privacy,
             &PredefinedMenuItem::separator(),
             &settings,
             &PredefinedMenuItem::separator(),
@@ -362,6 +367,16 @@ impl NativeMenu {
         lightcraft_ui_egui::i18n::set_language(app.ui.language);
         let mut quit = false;
         while let Ok(key) = self.rx.try_recv() {
+            if key == PRIVACY_POLICY {
+                let result = match app.services.open_url.as_mut() {
+                    Some(open_url) => open_url(PRIVACY_POLICY_URL),
+                    None => Err("The system browser is unavailable.".to_owned()),
+                };
+                if let Err(error) = result {
+                    app.notices.push(error);
+                }
+                continue;
+            }
             if key == QUIT {
                 quit = true;
                 continue;
