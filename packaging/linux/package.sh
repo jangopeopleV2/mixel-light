@@ -100,7 +100,7 @@ fi
 if has appimage; then
   APPDIR="$WORK/MIXEL Light.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
+  # Retain documentation and full licence notices in the AppImage payload.
   ln -s usr/bin/lightcraft "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"

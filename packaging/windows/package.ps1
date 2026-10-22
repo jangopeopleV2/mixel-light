@@ -113,6 +113,23 @@ Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'lightcraft.exe'), (Join-Path $Bin 'lightcraft-cli.exe') $Stage
 
+# Full notices for the frozen epaint_default_fonts 0.36.2 lock and application attribution.
+$LegalStage = Join-Path $Stage 'Licenses'
+$LegalFiles = @(
+  @{ Source = 'NOTICE'; Destination = 'NOTICE' },
+  @{ Source = 'packaging\licenses\epaint_default_fonts-0.36.2\Hack-Regular.txt'; Destination = 'epaint_default_fonts-0.36.2\Hack-Regular.txt' },
+  @{ Source = 'packaging\licenses\epaint_default_fonts-0.36.2\OFL.txt'; Destination = 'epaint_default_fonts-0.36.2\OFL.txt' },
+  @{ Source = 'packaging\licenses\epaint_default_fonts-0.36.2\UFL.txt'; Destination = 'epaint_default_fonts-0.36.2\UFL.txt' },
+  @{ Source = 'packaging\licenses\epaint_default_fonts-0.36.2\emoji-icon-font-mit-license.txt'; Destination = 'epaint_default_fonts-0.36.2\emoji-icon-font-mit-license.txt' }
+)
+foreach ($legalNotice in $LegalFiles) {
+  $legalSource = Join-Path $Root $legalNotice.Source
+  if (-not (Test-Path -LiteralPath $legalSource -PathType Leaf)) { throw "Missing legal notice: $legalSource" }
+  $legalDestination = Join-Path $LegalStage $legalNotice.Destination
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $legalDestination) -ErrorAction Stop | Out-Null
+  Copy-Item -LiteralPath $legalSource -Destination $legalDestination -ErrorAction Stop
+}
+
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'lightcraft.exe') (Join-Path $Stage 'lightcraft-cli.exe')
 
 # MSI installs the complete selected font licences too. Preserve the original
@@ -161,6 +178,7 @@ $Portable = Join-Path $TargetDir "windows-package\lightcraft-$Version-windows-$A
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
+Copy-Item -LiteralPath $LegalStage -Destination (Join-Path $Portable 'Licenses') -Recurse -ErrorAction Stop
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
