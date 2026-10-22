@@ -34,7 +34,11 @@
     <Property Id="ARPHELPLINK" Value="https://www.mixel.ch" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="MIXEL Light" />
+      <Directory Id="INSTALLFOLDER" Name="MIXEL Light">
+        <Directory Id="LegalDir2aea3bd4f7ec5ecbfa51" Name="Licenses">
+          <Directory Id="LegalDirad709c2fe37c58ab9647" Name="epaint_default_fonts-0.36.2" />
+        </Directory>
+      </Directory>
     </StandardDirectory>
     <!-- The folder of the installed version (written by LightcraftApp), so an upgrade installs
          where the user chose instead of moving back to Program Files (issue #399). Searched into
@@ -67,6 +71,7 @@
     <StandardDirectory Id="ProgramMenuFolder" />
 
     <Feature Id="Main" Title="MIXEL Light" Level="1">
+      <ComponentGroupRef Id="LegalNoticesLight" />
       <ComponentGroupRef Id="LightcraftFiles" />
     </Feature>
 
@@ -201,6 +206,26 @@
       </Component>
       <Component Id="LightcraftFontNotices">
         <File Id="LightcraftFontOfl" Source="$(var.BinDir)\OFL-craft-fonts.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="LegalNoticesLight">
+      <Component Id="LegalComponent7a6ffc2f4764cbd2d75d" Directory="LegalDir2aea3bd4f7ec5ecbfa51">
+        <File Id="LegalFile7a6ffc2f4764cbd2d75d" Source="$(var.BinDir)\Licenses\NOTICE" KeyPath="yes" />
+      </Component>
+      <Component Id="LegalComponent1105cd8ccbc213a54f23" Directory="LegalDirad709c2fe37c58ab9647">
+        <File Id="LegalFile1105cd8ccbc213a54f23" Source="$(var.BinDir)\Licenses\epaint_default_fonts-0.36.2\Hack-Regular.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="LegalComponentc4df10c5894e2b692f83" Directory="LegalDirad709c2fe37c58ab9647">
+        <File Id="LegalFilec4df10c5894e2b692f83" Source="$(var.BinDir)\Licenses\epaint_default_fonts-0.36.2\OFL.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="LegalComponent0f494e6fae7e28b0f99d" Directory="LegalDirad709c2fe37c58ab9647">
+        <File Id="LegalFile0f494e6fae7e28b0f99d" Source="$(var.BinDir)\Licenses\epaint_default_fonts-0.36.2\UFL.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="LegalComponent584539d16d3830ed6b4e" Directory="LegalDirad709c2fe37c58ab9647">
+        <File Id="LegalFile584539d16d3830ed6b4e" Source="$(var.BinDir)\Licenses\epaint_default_fonts-0.36.2\emoji-icon-font-mit-license.txt" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>
