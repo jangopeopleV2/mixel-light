@@ -31,7 +31,7 @@
     <Property Id="ARPPRODUCTICON" Value="LightcraftIcon.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/jangopeopleV2/mixel-light" />
     <Property Id="ARPURLUPDATEINFO" Value="https://github.com/jangopeopleV2/mixel-light" />
-    <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
+    <Property Id="ARPHELPLINK" Value="https://www.mixel.ch" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="MIXEL Light" />

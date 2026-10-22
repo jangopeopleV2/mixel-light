@@ -199,7 +199,7 @@ rustPlatform.buildRustPackage {
       layer as its UI. It ships with lightcraft-cli, a headless renderer, command runner and MCP
       server for AI agents.
     '';
-    homepage = "https://getartcraft.com/apps/lightcraft";
+    homepage = "https://github.com/jangopeopleV2/mixel-light";
     license = with lib.licenses; [
       mit
       asl20
