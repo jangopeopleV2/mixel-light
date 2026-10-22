@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+exclude = ["mixel/vendor/accesskit_atspi_common", "mixel/vendor/accesskit_unix", "mixel/vendor/atspi", "mixel/vendor/atspi-common", "mixel/vendor/atspi-proxies", "mixel/vendor/rustls-rustcrypto", "mixel/vendor/zbus-lockstep", "mixel/vendor/zbus-lockstep-macros"]
 
 [workspace.package]
 version = "0.7.1"
@@ -98,7 +99,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData"] }
 # Linux: the desktop's dark/light setting from the XDG settings portal (Settings ▸ Interface ▸
 # Appearance Mode ▸ Auto). Pure Rust; the version accesskit already brings in, pinned to it.
-zbus = "=5.19.0"
+zbus = "=6.0.0"
 web-time = "1"
 
 # web (apps/lightcraft-web)
@@ -167,3 +168,13 @@ miniz_oxide = { opt-level = 3 }
 # Exact origin, archive/source hashes, and the minimal local change are documented here.
 [patch.crates-io]
 block = { path = "mixel/vendor/block" }
+
+# Maintained zbus 6 protocol/accessibility dependency ports; source provenance is retained alongside each full package.
+accesskit_atspi_common = { path = "mixel/vendor/accesskit_atspi_common" }
+accesskit_unix = { path = "mixel/vendor/accesskit_unix" }
+atspi = { path = "mixel/vendor/atspi" }
+atspi-common = { path = "mixel/vendor/atspi-common" }
+atspi-proxies = { path = "mixel/vendor/atspi-proxies" }
+rustls-rustcrypto = { path = "mixel/vendor/rustls-rustcrypto" }
+zbus-lockstep = { path = "mixel/vendor/zbus-lockstep" }
+zbus-lockstep-macros = { path = "mixel/vendor/zbus-lockstep-macros" }

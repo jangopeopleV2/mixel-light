@@ -1,12 +1,10 @@
-//! Community and project links (Help menu, About dialog, top-bar Discord button).
+//! MIXEL and project links for the Help menu and About dialog.
 
-/// The app's id in ArtCraft URLs.
+/// The upstream application slug retained for compatible project routing.
 pub const APP: &str = "lightcraft";
-/// The ArtCraft community Discord.
-pub const DISCORD: &str = "https://discord.gg/artcraft";
-/// The ArtCraft website.
-pub const WEBSITE: &str = "https://getartcraft.com";
-/// This app's page on the ArtCraft website.
+/// The MIXEL website.
+pub const WEBSITE: &str = "https://www.mixel.ch";
+/// This app's MIXEL project page.
 pub const APP_PAGE: &str = "https://github.com/jangopeopleV2/mixel-light";
 /// This app's source repository.
 pub const GITHUB: &str = "https://github.com/jangopeopleV2/mixel-light";
@@ -17,10 +15,9 @@ pub const HELP: &str = "https://github.com/jangopeopleV2/mixel-light/tree/main/d
 
 pub const LINKS: &[(&str, &str, &str)] = &[
     ("app.help", "MIXEL Light Help", HELP),
-    ("app.discord", "Join the ArtCraft Discord…", DISCORD),
     ("app.website", "MIXEL Light Website", APP_PAGE),
     ("app.github", "MIXEL Light on GitHub", GITHUB),
-    ("app.artcraft", "ArtCraft Website", WEBSITE),
+    ("app.mixelWebsite", "MIXEL Website", WEBSITE),
     ("app.feedback", "Send Feedback…", FEEDBACK),
 ];
 
@@ -45,7 +42,11 @@ mod tests {
 
     #[test]
     fn links_are_https_and_name_this_app() {
+        let mut ids = std::collections::BTreeSet::new();
         for (id, label, url) in LINKS {
+            assert!(ids.insert(id), "duplicate link command: {id}");
+            assert!(!label.to_ascii_lowercase().contains("artcraft"));
+            assert!(!url.to_ascii_lowercase().contains("artcraft"));
             assert!(url.starts_with("https://"), "{id}");
             assert!(!label.is_empty());
             assert_eq!(url_of(id), Some(*url));
