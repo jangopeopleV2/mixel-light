@@ -167,6 +167,8 @@ miniz_oxide = { opt-level = 3 }
 # MIT block 0.1.6: inhabited opaque FFI class symbol, without warning suppression.
 # Exact origin, archive/source hashes, and the minimal local change are documented here.
 [patch.crates-io]
+# macOS App Store: retain winit 0.30.13 without private window-server blur APIs.
+winit = { path = "mixel/vendor/winit" }
 block = { path = "mixel/vendor/block" }
 
 # Maintained zbus 6 protocol/accessibility dependency ports; source provenance is retained alongside each full package.
