@@ -76,3 +76,9 @@ Build receipts retain the exact source commit, full source map, helper/module
 bytes, and binary proofs used by the build. A later documentation-only commit
 must not be presented as the commit used by an already-built package. Preserve
 those original receipt/source pins when recording the documentation follow-up.
+
+## Signed resource readability
+
+Only codesign child processes use creation mask `022`; private run logs keep the caller’s mask. The helper checks the signed app root, all directories and every file for public readability before creating the installer, then checks the expanded payload again. This covers signature resources created after the initial staging pass.
+
+`test_mas_readability.py` covers restrictive caller masks, private logs, unreadable signature files and directories, and both packaging gates using subprocess doubles. Existing signed bundles can receive a permission-only repair on a fresh copy: change only `Contents/_CodeSignature/CodeResources` from `0600` to `0644`, preserve every file byte and the existing app signature, and create and validate a new installer.

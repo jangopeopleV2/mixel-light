@@ -252,10 +252,24 @@ def verify_app_private_api(app):
     return scanned
 
 
-def run(argv, *, env=None, cwd=None, log=None):
+def verify_public_bundle_readability(app):
+    """Check install-time permissions without changing signed bytes or modes."""
+    app = Path(app)
+    require(app.is_dir() and not app.is_symlink(), "Public app bundle must be an ordinary directory")
+    for path in (app, *sorted(app.rglob("*"))):
+        mode = path.lstat().st_mode
+        label = "." if path == app else str(path.relative_to(app))
+        if stat.S_ISDIR(mode):
+            require(mode & 0o555 == 0o555, f"App directory is not publicly readable and traversable: {label}")
+        else:
+            require(stat.S_ISREG(mode), f"Unexpected non-regular app payload: {label}")
+            require(mode & 0o444 == 0o444, f"App file is not publicly readable: {label}")
+
+
+def run(argv, *, env=None, cwd=None, log=None, umask=-1):
     """Never echo command arguments: profile paths and tool output may be private."""
     try:
-        result = subprocess.run(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        result = subprocess.run(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, umask=umask)
     except OSError as error:
         raise Failure(f"Cannot execute {Path(argv[0]).name}: {error.strerror}") from error
     if log is not None:
@@ -807,7 +821,8 @@ def package(root, config, args, env):
     run([TOOLS["plutil"], "-lint", str(contents / "Info.plist"), str(resources / "PrivacyInfo.xcprivacy"), str(entitlement_path)], log=work / "plist-validation.log")
     verify_app_private_api(app)
     for index, subject in enumerate((executable, app), 1):
-        run([TOOLS["codesign"], "--force", "--sign", signing["identity"], "--timestamp", "--options", "runtime", "--entitlements", str(entitlement_path), str(subject)], log=work / f"codesign-{index}.log")
+        run([TOOLS["codesign"], "--force", "--sign", signing["identity"], "--timestamp", "--options", "runtime", "--entitlements", str(entitlement_path), str(subject)], log=work / f"codesign-{index}.log", umask=0o022)
+    verify_public_bundle_readability(app)
     verify_app(app, entitlements, signing["identity"], work, "staged")
     staged_tree = tree_proof(app)
     internal_pkg = work / f"mixel-{slug}-{version}-build{number}-macos-{args.arch}.pkg"
@@ -820,6 +835,7 @@ def package(root, config, args, env):
     run([TOOLS["pkgutil"], "--expand-full", str(internal_pkg), str(expanded)], log=work / "pkg-expand.log")
     candidates = list(expanded.rglob(f"MIXEL {title}.app"))
     require(len(candidates) == 1 and candidates[0].is_dir(), "Installer must contain exactly the intended application")
+    verify_public_bundle_readability(candidates[0])
     require(tree_proof(candidates[0]) == staged_tree, "Expanded installer app differs from the signed staged app")
     verify_app_private_api(candidates[0])
     verify_app(candidates[0], entitlements, signing["identity"], work, "expanded")
